@@ -14,5 +14,35 @@
     "Hozier",
     "Tame Impala",
     "Mt. Joy"
-  ]
+  ],
+  "maxArtists": 30,
+  "requestForm": null,
+  "requestsCsv": null,
+  "requestsRowsProcessed": 0,
+  "artistMeta": {
+    "Billie Eilish": {
+      "source": "seed"
+    },
+    "Sabrina Carpenter": {
+      "source": "seed"
+    },
+    "Tyler, The Creator": {
+      "source": "seed"
+    },
+    "Khruangbin": {
+      "source": "seed"
+    },
+    "Fred again..": {
+      "source": "seed"
+    },
+    "Hozier": {
+      "source": "seed"
+    },
+    "Tame Impala": {
+      "source": "seed"
+    },
+    "Mt. Joy": {
+      "source": "seed"
+    }
+  }
 }

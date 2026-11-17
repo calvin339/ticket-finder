@@ -494,6 +494,30 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   // onsales.json sits next to this page. A scheduled web search updates it twice a week
   // for the artists in watchlist.json near one area.
   let webFeed = null;
+  // watchlist.json holds the shared watch list and the request-form settings.
+  let watchCfg = null;
+  async function loadWatchCfg() {
+    if (window.location.protocol === "file:") return null;
+    try { const r = await fetch("watchlist.json", { cache: "no-cache" }); watchCfg = r.ok ? await r.json() : null; } catch { watchCfg = null; }
+    return watchCfg;
+  }
+  const watchNames = () => [...(webFeed?.artists || []), ...(watchCfg?.artists || [])].map(norm);
+  const isWatched = (name) => watchNames().includes(norm(name));
+  const MAX_REQUESTS_PER_BROWSER = 15;
+  // Ask for an artist to be added to the web-search watch list (anonymous Google Form submission).
+  async function requestWatch(name) {
+    const form = watchCfg?.requestForm;
+    if (!form?.action || !form?.entry || !/^https:\/\/docs\.google\.com\/forms\//.test(form.action)) return false;
+    if (!webFeed || !feedCoversMe() || isWatched(name)) return false;
+    S.requested = S.requested || {};
+    if (S.requested[norm(name)] || Object.keys(S.requested).length >= MAX_REQUESTS_PER_BROWSER) return false;
+    try {
+      await fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams({ [form.entry]: name.slice(0, 100) }) });
+      S.requested[norm(name)] = new Date().toISOString(); save();
+      return true;
+    } catch { return false; }
+  }
+  async function requestMissing() { for (const a of S.artists) if (!isWatched(a.name)) await requestWatch(a.name); renderChips(); }
   async function loadWebFeed() {
     if (window.location.protocol === "file:") return null;
     try {
@@ -764,10 +788,11 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     $("webNote").hidden = !watched.length;
     if (watched.length) {
       const when = parse(webFeed.checkedAt);
-      $("webNote").innerHTML = `⏱ = on-sale times found by a web search twice a week${when ? ` (last ${esc(when.toLocaleDateString(undefined, { month: "short", day: "numeric" }))})` : ""}. Artists checked: ${esc(watched.join(", "))}.`;
+      const canRequest = !!watchCfg?.requestForm?.action;
+      $("webNote").innerHTML = `⏱ = exact on-sale times from a web search twice a week${when ? ` (last ${esc(when.toLocaleDateString(undefined, { month: "short", day: "numeric" }))})` : ""}.${canRequest ? " Artists you add are requested automatically (⏳) and join the next check, up to " + esc(watchCfg.maxArtists || 30) + " artists in total." : ""} Checked now: ${esc(watched.join(", "))}.`;
     }
     if (!S.artists.length) { el.innerHTML = `<div class="empty">No artists yet.</div>`; return; }
-    el.innerHTML = S.artists.map((a, i) => `<span class="chip" ${webWatches(a) ? 'title="On-sale times checked by web search twice a week"' : ""}>${avatar(a.img, a.name, 28)}${esc(a.name)}${webWatches(a) ? '<span class="watch">⏱</span>' : ""}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
+    el.innerHTML = S.artists.map((a, i) => `<span class="chip" ${webWatches(a) ? 'title="On-sale times checked by web search twice a week"' : ""}>${avatar(a.img, a.name, 28)}${esc(a.name)}${webWatches(a) ? '<span class="watch">⏱</span>' : (S.requested?.[norm(a.name)] ? '<span class="watch" style="color:var(--muted)" title="Requested: exact on-sale times start after the next web check">⏳</span>' : "")}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
     const where = S.location ? S.location.label.replace(/^your current location$/, "") : "";
     $("elsewhere").innerHTML = S.artists.map((a) => {
       const q = `${a.name} concert tickets ${where} AXS OR DICE OR Eventbrite OR presale`.replace(/\s+/g, " ").trim();
@@ -974,6 +999,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     S.artists.push({ id: a.id || null, sgId: a.sgId, jbId: a.jbId, name: a.name, img: safeUrl(a.img) || null }); // undefined ids are looked up on the first check
     S.artists.sort((x, y) => x.name.localeCompare(y.name));
     save(); renderAll(); toast(`Added ${a.name}`); scheduleCheck();
+    requestWatch(a.name).then((ok) => { if (ok) renderChips(); });
   }
   $("chips").addEventListener("click", (e) => {
     const b = e.target.closest("[data-rm]"); if (!b) return;
@@ -1035,7 +1061,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     if (!fresh.length) return;
     const names = fresh.slice(0, 6).map((a) => a.name).join(", ") + (fresh.length > 6 ? ` and ${fresh.length - 6} more` : "");
     $("importBanner").innerHTML = `<div class="banner"><b>Someone shared their artists with you:</b> ${esc(names)}<div class="row"><button type="button" id="impYes">Add ${fresh.length} artist${fresh.length === 1 ? "" : "s"}</button><button type="button" class="ghost" id="impNo">No thanks</button></div></div>`;
-    $("impYes").onclick = () => { S.artists.push(...fresh); S.artists.sort((x, y) => x.name.localeCompare(y.name)); save(); $("importBanner").innerHTML = ""; renderAll(); toast(`Added ${fresh.length} artists`); scheduleCheck(); };
+    $("impYes").onclick = () => { S.artists.push(...fresh); S.artists.sort((x, y) => x.name.localeCompare(y.name)); save(); $("importBanner").innerHTML = ""; renderAll(); toast(`Added ${fresh.length} artists`); scheduleCheck(); requestMissing(); };
     $("impNo").onclick = () => { $("importBanner").innerHTML = ""; };
   }
 
@@ -1046,6 +1072,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   const stale = !S.fetchedAt || Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS || S.fetchKey !== fetchKey();
   if (stale) check({ quiet: true });
   else loadWebFeed().then((f) => { if (f && f.checkedAt && f.checkedAt !== S.feedAt) check({ quiet: true }); else renderAll(); });
+  Promise.all([loadWatchCfg(), webFeed ? webFeed : loadWebFeed()]).then(() => requestMissing());
   setInterval(renderList, 60000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && S.fetchedAt && Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS) check({ quiet: true });
