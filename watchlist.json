@@ -5,16 +5,7 @@
     "lon": -122.4194
   },
   "radius": 50,
-  "artists": [
-    "Billie Eilish",
-    "Sabrina Carpenter",
-    "Tyler, The Creator",
-    "Khruangbin",
-    "Fred again..",
-    "Hozier",
-    "Tame Impala",
-    "Mt. Joy"
-  ],
+  "artists": [],
   "maxArtists": 30,
   "requestForm": {
     "action": "https://docs.google.com/forms/d/e/1FAIpQLSeuyk9ZZ7j3MREf34dAIMMyuhoXzIx4HQkb9z1CACbLAjDi3g/formResponse",
@@ -22,30 +13,5 @@
   },
   "requestsCsv": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQh7lzGDmo0AKzYYl8R0j5qbSlmI2QIeN7EGZfjAyNPajDrybkNc0sjYN33XI39MqB9zRqbiEldaX4s/pub?gid=191350233&single=true&output=csv",
   "requestsRowsProcessed": 1,
-  "artistMeta": {
-    "Billie Eilish": {
-      "source": "seed"
-    },
-    "Sabrina Carpenter": {
-      "source": "seed"
-    },
-    "Tyler, The Creator": {
-      "source": "seed"
-    },
-    "Khruangbin": {
-      "source": "seed"
-    },
-    "Fred again..": {
-      "source": "seed"
-    },
-    "Hozier": {
-      "source": "seed"
-    },
-    "Tame Impala": {
-      "source": "seed"
-    },
-    "Mt. Joy": {
-      "source": "seed"
-    }
-  }
+  "artistMeta": {}
 }
