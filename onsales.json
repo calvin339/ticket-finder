@@ -1,0 +1,20 @@
+{
+  "checkedAt": null,
+  "location": {
+    "label": "San Francisco, California",
+    "lat": 37.7749,
+    "lon": -122.4194
+  },
+  "radius": 50,
+  "artists": [
+    "Billie Eilish",
+    "Sabrina Carpenter",
+    "Tyler, The Creator",
+    "Khruangbin",
+    "Fred again..",
+    "Hozier",
+    "Tame Impala",
+    "Mt. Joy"
+  ],
+  "items": []
+}
