@@ -132,7 +132,7 @@
     </div>
     <div class="head-actions">
       <button class="ghost" id="shareBtn" type="button">Share my artists</button>
-      <button id="checkBtn" type="button">Check now</button>
+      <button id="checkBtn" type="button" title="Refresh shows and on-sale times now">Update</button>
     </div>
   </header>
 
@@ -202,7 +202,7 @@
   </div>
 
   <footer>
-    Shows come from <span id="srcList">Ticketmaster, SeatGeek and JamBase</span>. Presale and on-sale times come from Ticketmaster and a twice-weekly web search. Shows sold only through AXS, DICE, Eventbrite or a venue's box office may be missing, so use "Search other sites" for those.<br>
+    Shows come from <span id="srcList">Ticketmaster, SeatGeek and JamBase</span>. Presale and on-sale times come from Ticketmaster and a daily web search. Shows sold only through AXS, DICE, Eventbrite or a venue's box office may be missing, so use "Search other sites" for those.<br>
     Your location and artists are stored only in this browser.
     <details style="margin-top:8px"><summary>Settings</summary>
       <div style="margin-top:8px"><button class="link" id="changeKey" type="button">Change data source keys</button> · <button class="link" id="resetAll" type="button">Clear all my data</button></div>
@@ -491,7 +491,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   }
 
   // ---------- Web-checked on-sale times ----------
-  // onsales.json sits next to this page. A scheduled web search updates it twice a week
+  // onsales.json sits next to this page. A scheduled web search updates it daily
   // for the artists in watchlist.json near one area.
   let webFeed = null;
   // watchlist.json holds the shared watch list and the request-form settings.
@@ -789,10 +789,10 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     if (watched.length) {
       const when = parse(webFeed.checkedAt);
       const canRequest = !!watchCfg?.requestForm?.action;
-      $("webNote").innerHTML = `⏱ = exact on-sale times from a web search twice a week${when ? ` (last ${esc(when.toLocaleDateString(undefined, { month: "short", day: "numeric" }))})` : ""}.${canRequest ? " Artists you add are requested automatically (⏳) and join the next check, up to " + esc(watchCfg.maxArtists || 30) + " artists in total." : ""} Checked now: ${esc(watched.join(", "))}.`;
+      $("webNote").innerHTML = `⏱ = exact on-sale times from a daily web search${when ? ` (last ${esc(when.toLocaleDateString(undefined, { month: "short", day: "numeric" }))})` : ""}.${canRequest ? " Artists you add are requested automatically (⏳) and join the next daily check, up to " + esc(watchCfg.maxArtists || 30) + " artists in total." : ""} Checked now: ${esc(watched.join(", "))}.`;
     }
     if (!S.artists.length) { el.innerHTML = `<div class="empty">No artists yet.</div>`; return; }
-    el.innerHTML = S.artists.map((a, i) => `<span class="chip" ${webWatches(a) ? 'title="On-sale times checked by web search twice a week"' : ""}>${avatar(a.img, a.name, 28)}${esc(a.name)}${webWatches(a) ? '<span class="watch">⏱</span>' : (S.requested?.[norm(a.name)] ? '<span class="watch" style="color:var(--muted)" title="Requested: exact on-sale times start after the next web check">⏳</span>' : "")}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
+    el.innerHTML = S.artists.map((a, i) => `<span class="chip" ${webWatches(a) ? 'title="On-sale times checked by a daily web search"' : ""}>${avatar(a.img, a.name, 28)}${esc(a.name)}${webWatches(a) ? '<span class="watch">⏱</span>' : (S.requested?.[norm(a.name)] ? '<span class="watch" style="color:var(--muted)" title="Requested: exact on-sale times start after the next daily web check">⏳</span>' : "")}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
     const where = S.location ? S.location.label.replace(/^your current location$/, "") : "";
     $("elsewhere").innerHTML = S.artists.map((a) => {
       const q = `${a.name} concert tickets ${where} AXS OR DICE OR Eventbrite OR presale`.replace(/\s+/g, " ").trim();
@@ -828,7 +828,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     else tags.push(`<span class="tag tba">${esc(rel(m.at))}</span>`);
     const g = parse(ev.publicStart);
     if (m.kind === "presale" && g && g.getTime() > Date.now()) tags.push(`<span class="tag general">General ${esc(fmtShort(g))} ${esc(fmtTime(g))}</span>`);
-    if (m.fromWeb) tags.push(`<span class="tag web" title="Found by the twice-weekly web search. Double-check on the ticket site.">Found by web search</span>`);
+    if (m.fromWeb) tags.push(`<span class="tag web" title="Found by the daily web search. Double-check on the ticket site.">Found by web search</span>`);
     const idx = currentMoments.indexOf(m);
     return `<div class="item">
       <div class="when ${soon ? "soon" : ""}"><div class="lbl">${m.live ? "Live" : esc(m.kind === "presale" ? "Presale" : "On sale")}</div><div class="d">${esc(m.live ? "Now" : fmtTime(m.at))}</div><div class="t">${esc(fmtShort(m.at))}</div></div>
@@ -902,7 +902,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
           if (label !== lastDay) { body += `<div class="day">${esc(label)}</div>`; lastDay = label; }
           body += momentHtml(m);
         }
-      } else if (S.fetchedAt && !apiKey() && !S.artists.some(webWatches)) body = `<div class="banner"><b>None of your artists are on the web-search watch list.</b> Exact times come from a Ticketmaster key or the twice-weekly web search. Until then, check "Just announced": new shows usually go on sale within a few days, and the ticket link shows the time.</div>`;
+      } else if (S.fetchedAt && !apiKey() && !S.artists.some(webWatches)) body = `<div class="banner"><b>None of your artists are on the web-search watch list.</b> Exact times come from a Ticketmaster key or the daily web search. Until then, check "Just announced": new shows usually go on sale within a few days, and the ticket link shows the time.</div>`;
       else if (S.fetchedAt) body = `<div class="empty">No upcoming presales or on-sales near you for your artists right now. Check "Just announced" for new shows, which usually go on sale within days.</div>`;
     } else {
       const items = G[tab];
@@ -924,7 +924,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     checking = true;
     await loadWebFeed();
     if (!anyKey() && !webFeed) { checking = false; if (!quiet) toast("Add a data source key first."); return; }
-    $("checkBtn").disabled = true; $("checkBtn").textContent = "Checking…";
+    $("checkBtn").disabled = true; $("checkBtn").textContent = "Updating…";
     const bar = $("progress"); bar.hidden = false; bar.firstElementChild.style.width = "4%";
     const sources = activeSources();
     const dead = {};                 // source -> fatal error (bad key / offline)
@@ -953,10 +953,10 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
       save();
     }
     checking = false;
-    $("checkBtn").disabled = false; $("checkBtn").textContent = "Check now";
+    $("checkBtn").disabled = false; $("checkBtn").textContent = "Update";
     setTimeout(() => { bar.hidden = true; bar.firstElementChild.style.width = "0"; }, 400);
     renderAll();
-    // An expired JamBase trial shouldn't nag on every visit: only mention it when someone taps "Check now".
+    // An expired JamBase trial shouldn't nag on every visit: only mention it when someone taps "Update".
     const deadErrs = Object.values(dead).filter((e) => !(quiet && e.source === "jb"));
     if (deadErrs.length) {
       toast(deadErrs.map((e) => e.source === "jb" && e.status === 401 ? "JamBase key isn't working (the trial may have ended)." : e.message).join(" "));

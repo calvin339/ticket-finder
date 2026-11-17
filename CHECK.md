@@ -1,6 +1,6 @@
 # On-sale web check: instructions
 
-The scheduled "On-Sale Radar web check" follows these steps twice a week. Edit this file to change how the check works.
+The scheduled "On-Sale Radar web check" follows these steps every day. Edit this file to change how the check works.
 
 ## Inputs
 - `watchlist.json`: `{ "location": {label, lat, lon}, "radius": miles, "artists": [names], "maxArtists": 30, "requestForm": {...}, "requestsCsv": "...", "requestsRowsProcessed": n, "artistMeta": {...} }`. The site reads `requestForm`. Don't change it.
