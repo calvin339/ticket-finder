@@ -1,4 +1,4 @@
-# On-Sale Radar
+# Ticket Finder
 
 Know when tickets go on sale for the artists you love, near you.
 

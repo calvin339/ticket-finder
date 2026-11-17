@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>On-Sale Radar</title>
+<title>Ticket Finder</title>
 <meta name="description" content="Know when tickets go on sale for the artists you love, near you.">
 <meta name="theme-color" content="#0f0e13">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="On-Sale Radar">
+<meta name="apple-mobile-web-app-title" content="Ticket Finder">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -127,7 +127,7 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>On-Sale <span>Radar</span></h1>
+      <h1>Ticket <span>Finder</span></h1>
       <div class="sub">Know when tickets drop for the artists you love, near you.</div>
     </div>
     <div class="head-actions">
@@ -635,7 +635,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   const icsText = (s) => String(s || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/[,;]/g, (m) => "\\" + m);
   function icsFold(line) { const out = []; while (line.length > 74) { out.push(line.slice(0, 74)); line = " " + line.slice(74); } out.push(line); return out.join("\r\n"); }
   function buildIcs(moments) {
-    const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//On-Sale Radar//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
+    const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Ticket Finder//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
     const stamp = icsDate(new Date());
     for (const m of moments) {
       const ev = m.ev;
@@ -643,7 +643,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
       const title = `🎟 ${ev.artistName}: ${m.label} (${ev.city || ev.venue})`;
       const desc = [`${ev.name}`, `${ev.venue}${ev.city ? ", " + ev.city : ""}`, ev.showDate ? `Show: ${ev.showDate}` : "", m.url ? `Tickets: ${m.url}` : ""].filter(Boolean).join("\n");
       lines.push("BEGIN:VEVENT",
-        `UID:${ev.id}-${m.kind}-${start.getTime()}@onsale-radar`,
+        `UID:${ev.id}-${m.kind}-${start.getTime()}@ticket-finder`,
         `DTSTAMP:${stamp}`, `DTSTART:${icsDate(start)}`, `DTEND:${icsDate(end)}`,
         icsFold(`SUMMARY:${icsText(title)}`), icsFold(`DESCRIPTION:${icsText(desc)}`),
         icsFold(`LOCATION:${icsText(ev.venue + (ev.city ? ", " + ev.city : ""))}`));
@@ -1077,7 +1077,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   $("shareBtn").addEventListener("click", async () => {
     const url = S.artists.length ? shareUrl() : (() => { const u = new URL(location.href); u.search = ""; u.hash = ""; return u.href; })();
     const text = S.artists.length ? `Track ticket on-sales for ${S.artists.length} artist${S.artists.length === 1 ? "" : "s"} on my list` : "Know when tickets go on sale for your artists";
-    if (navigator.share) { try { await navigator.share({ title: "On-Sale Radar", text, url }); return; } catch (e) { if (e.name === "AbortError") return; } }
+    if (navigator.share) { try { await navigator.share({ title: "Ticket Finder", text, url }); return; } catch (e) { if (e.name === "AbortError") return; } }
     try { await navigator.clipboard.writeText(url); toast("Link copied."); }
     catch { window.prompt("Copy this link:", url); }
   });
