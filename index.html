@@ -812,11 +812,12 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     const el = $("chips");
     $("elsewhereBox").hidden = !S.artists.length;
     const watched = webFeed && feedCoversMe() ? (webFeed.artists || []) : [];
-    $("webNote").hidden = !watched.length;
-    if (watched.length) {
+    const showNote = watched.length && S.artists.some((a) => webWatches(a) || S.requested?.[norm(a.name)]);
+    $("webNote").hidden = !showNote;
+    if (showNote) {
       const when = parse(webFeed.checkedAt);
       const canRequest = !!watchCfg?.requestForm?.action;
-      $("webNote").innerHTML = `⏱ = exact on-sale times from a web search that runs 3 times a day${when ? ` (last ${esc(when.toLocaleDateString(undefined, { month: "short", day: "numeric" }))})` : ""}.${canRequest ? " Artists you add are requested automatically (⏳) and join the next check (3 times a day), up to " + esc(watchCfg.maxArtists || 30) + " artists in total." : ""} Checked now: ${esc(watched.join(", "))}.`;
+      $("webNote").innerHTML = `⏱ Exact on-sale times found by web search.${canRequest ? " ⏳ Added, and included from the next search (3 times a day)." : ""}`;
     }
     if (!S.artists.length) { el.innerHTML = `<div class="empty">No artists yet.</div>`; return; }
     el.innerHTML = S.artists.map((a, i) => `<span class="chip" ${webWatches(a) ? 'title="On-sale times checked by a web search 3 times a day"' : ""}>${avatar(a.img, a.name, 28)}${esc(a.name)}${webWatches(a) ? '<span class="watch">⏱</span>' : (S.requested?.[norm(a.name)] ? '<span class="watch" style="color:var(--muted)" title="Requested: exact on-sale times start after the next web check">⏳</span>' : "")}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
