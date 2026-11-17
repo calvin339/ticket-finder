@@ -517,6 +517,33 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
       return true;
     } catch { return false; }
   }
+  // "Update" also asks for a fresh web search (sent through the same form; a GitHub automation starts it).
+  const WEB_CHECK_GAP_MS = 30 * 60 * 1000, WEB_CHECK_WAIT_MS = 45 * 60 * 1000;
+  const webCheckPending = () => { const t = parse(S.lastWebReq); return !!t && Date.now() - t.getTime() < WEB_CHECK_WAIT_MS && (webFeed?.checkedAt || null) === (S.webReqBase || null); };
+  async function requestWebCheck() {
+    const form = watchCfg?.requestForm;
+    if (!form?.action || !form?.entry || !webFeed || !feedCoversMe()) return null;
+    const last = parse(S.lastWebReq);
+    if (last && Date.now() - last.getTime() < WEB_CHECK_GAP_MS) return "recent";
+    try {
+      await fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams({ [form.entry]: "__CHECK_NOW__" }) });
+      S.lastWebReq = new Date().toISOString(); S.webReqBase = webFeed?.checkedAt || null; save();
+      watchForResults();
+      return "sent";
+    } catch { return null; }
+  }
+  let pollT = null;
+  function watchForResults() {
+    clearInterval(pollT);
+    if (!webCheckPending()) return;
+    pollT = setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      const before = S.webReqBase || null;
+      await loadWebFeed();
+      if ((webFeed?.checkedAt || null) !== before) { clearInterval(pollT); await check({ quiet: true }); toast("New web search results are in."); }
+      else if (!webCheckPending()) { clearInterval(pollT); renderList(); }
+    }, 60000);
+  }
   async function requestMissing() { for (const a of S.artists) if (!isWatched(a.name)) await requestWatch(a.name); renderChips(); }
   async function loadWebFeed() {
     if (window.location.protocol === "file:") return null;
@@ -884,7 +911,9 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     const G = groups();
     const defs = [["upcoming", "Going on sale"], ["fresh", "Just announced"], ["onsale", "On sale now"], ["tba", "No on-sale date yet"], ["all", "All shows"]];
     $("tabs").innerHTML = defs.map(([k, l]) => `<button type="button" class="tab ${tab === k ? "on" : ""}" data-tab="${k}">${l}<span class="n">${G[k].length}</span></button>`).join("");
-    $("checked").textContent = S.fetchedAt ? `Last checked ${new Date(S.fetchedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : "";
+    const fmtAt = (d) => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    $("checked").textContent = (S.fetchedAt ? `Last updated ${fmtAt(S.fetchedAt)}` : "") +
+      (webCheckPending() ? ` · Web search for on-sale times running (started ${new Date(S.lastWebReq).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}). Results in about 15–25 minutes.` : "");
 
     let head = "";
     if (!anyKey() && !webFeed) head = `<div class="banner"><b>One-time setup:</b> add a Ticketmaster, JamBase or SeatGeek key (left panel) to start searching.</div>`;
@@ -1066,13 +1095,21 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   }
 
   // ---------- Boot ----------
-  $("checkBtn").addEventListener("click", () => check());
+  $("checkBtn").addEventListener("click", async () => {
+    if (!watchCfg) await loadWatchCfg();
+    if (!webFeed) await loadWebFeed();
+    const r = await requestWebCheck();
+    await check();
+    if (r === "sent") toast("Updated. A fresh web search for on-sale times has started; results in about 15–25 minutes.");
+    else if (r === "recent") toast("Updated. A web search ran in the last 30 minutes, so its results are the latest.");
+    renderList();
+  });
   readShared();
   renderAll();
   const stale = !S.fetchedAt || Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS || S.fetchKey !== fetchKey();
   if (stale) check({ quiet: true });
   else loadWebFeed().then((f) => { if (f && f.checkedAt && f.checkedAt !== S.feedAt) check({ quiet: true }); else renderAll(); });
-  Promise.all([loadWatchCfg(), webFeed ? webFeed : loadWebFeed()]).then(() => requestMissing());
+  Promise.all([loadWatchCfg(), webFeed ? webFeed : loadWebFeed()]).then(() => { requestMissing(); watchForResults(); renderList(); });
   setInterval(renderList, 60000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && S.fetchedAt && Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS) check({ quiet: true });
