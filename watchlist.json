@@ -7,7 +7,8 @@
   "radius": 50,
   "artists": [
     "The Mountain Goats",
-    "Luna"
+    "Luna",
+    "Radiohead"
   ],
   "maxArtists": 30,
   "requestForm": {
@@ -15,7 +16,7 @@
     "entry": "entry.1671614777"
   },
   "requestsCsv": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQh7lzGDmo0AKzYYl8R0j5qbSlmI2QIeN7EGZfjAyNPajDrybkNc0sjYN33XI39MqB9zRqbiEldaX4s/pub?gid=191350233&single=true&output=csv",
-  "requestsRowsProcessed": 3,
+  "requestsRowsProcessed": 4,
   "artistMeta": {
     "The Mountain Goats": {
       "addedAt": "2026-11-17T05:46:45Z",
@@ -23,6 +24,10 @@
     },
     "Luna": {
       "addedAt": "2026-11-17T05:46:45Z",
+      "source": "request"
+    },
+    "Radiohead": {
+      "addedAt": "2026-11-17T18:37:07Z",
       "source": "request"
     }
   }
