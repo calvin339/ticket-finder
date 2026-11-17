@@ -1,13 +1,10 @@
-name: Sync requests and start web checks
+name: Sync artist requests
 
-# Every few minutes:
-#  1. Copies the Google Sheet of visitor requests into requests.csv.
-#  2. If someone tapped "Update" on the site (a "__CHECK_NOW__" row), starts the
-#     On-Sale Radar web check through its API trigger. At most once every 30 minutes.
-# Needs the repository secret ROUTINE_TOKEN (the web check's API trigger token).
+# Copies the Google Sheet of visitor artist requests into requests.csv every hour,
+# so the web check (3 times a day) can read it from the repository.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,10 +13,6 @@ permissions:
 concurrency:
   group: sync-requests
   cancel-in-progress: false
-
-env:
-  ROUTINE_ID: trig_016tK3kcWotV2tmUQMWgN4Vv
-  MIN_MINUTES_BETWEEN_RUNS: "30"
 
 jobs:
   sync:
@@ -34,48 +27,12 @@ jobs:
           curl -fsSL "$url" -o requests.csv.new
           mv requests.csv.new requests.csv
 
-      - name: Start a web check if requested
-        env:
-          ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
-        run: |
-          python3 - <<'PY'
-          import csv, json, os, datetime, subprocess, urllib.request
-          rows = list(csv.reader(open("requests.csv"))) if os.path.exists("requests.csv") else []
-          wanted = sum(1 for r in rows[1:] if len(r) > 1 and r[1].strip() == "__CHECK_NOW__")
-          state = json.load(open("checknow.json")) if os.path.exists("checknow.json") else {"handled": 0, "lastFiredAt": None}
-          now = datetime.datetime.now(datetime.timezone.utc)
-          if wanted <= state["handled"]:
-              print("No new update requests"); raise SystemExit
-          last = state.get("lastFiredAt")
-          if last and (now - datetime.datetime.fromisoformat(last)).total_seconds() < int(os.environ["MIN_MINUTES_BETWEEN_RUNS"]) * 60:
-              print("A web check started recently; marking request handled"); state["handled"] = wanted
-          elif not os.environ.get("ROUTINE_TOKEN"):
-              print("ROUTINE_TOKEN secret is not set; can't start the web check"); raise SystemExit
-          else:
-              req = urllib.request.Request(
-                  f"https://api.anthropic.com/v1/claude_code/routines/{os.environ['ROUTINE_ID']}/fire",
-                  data=json.dumps({"text": "Started from the site's Update button."}).encode(),
-                  headers={"Authorization": f"Bearer {os.environ['ROUTINE_TOKEN']}",
-                           "anthropic-beta": "experimental-cc-routine-2026-04-01",
-                           "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                  method="POST")
-              try:
-                  with urllib.request.urlopen(req, timeout=30) as r:
-                      print("Started web check:", r.status)
-                  state.update(handled=wanted, lastFiredAt=now.isoformat())
-              except Exception as e:
-                  # Don't retry every 5 minutes; the next Update tap will try again.
-                  print("::warning::Couldn't start the web check:", e)
-                  state["handled"] = wanted
-          json.dump(state, open("checknow.json", "w"), indent=2)
-          PY
-
       - name: Commit if changed
         run: |
-          if [ -n "$(git status --porcelain requests.csv checknow.json 2>/dev/null)" ]; then
+          if [ -n "$(git status --porcelain requests.csv)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add requests.csv checknow.json 2>/dev/null || git add requests.csv
+            git add requests.csv
             git commit -m "Sync requests"
             git pull --rebase -q origin main && git push
           else
