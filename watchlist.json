@@ -5,13 +5,25 @@
     "lon": -122.4194
   },
   "radius": 50,
-  "artists": [],
+  "artists": [
+    "The Mountain Goats",
+    "Luna"
+  ],
   "maxArtists": 30,
   "requestForm": {
     "action": "https://docs.google.com/forms/d/e/1FAIpQLSeuyk9ZZ7j3MREf34dAIMMyuhoXzIx4HQkb9z1CACbLAjDi3g/formResponse",
     "entry": "entry.1671614777"
   },
   "requestsCsv": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQh7lzGDmo0AKzYYl8R0j5qbSlmI2QIeN7EGZfjAyNPajDrybkNc0sjYN33XI39MqB9zRqbiEldaX4s/pub?gid=191350233&single=true&output=csv",
-  "requestsRowsProcessed": 1,
-  "artistMeta": {}
+  "requestsRowsProcessed": 3,
+  "artistMeta": {
+    "The Mountain Goats": {
+      "addedAt": "2026-11-17T05:46:45Z",
+      "source": "request"
+    },
+    "Luna": {
+      "addedAt": "2026-11-17T05:46:45Z",
+      "source": "request"
+    }
+  }
 }

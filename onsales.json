@@ -1,11 +1,63 @@
 {
-  "checkedAt": "2026-11-17T04:25:53Z",
+  "checkedAt": "2026-11-17T05:46:45Z",
   "location": {
     "label": "San Francisco, California",
     "lat": 37.7749,
     "lon": -122.4194
   },
   "radius": 50,
-  "artists": [],
-  "items": []
+  "artists": [
+    "The Mountain Goats",
+    "Luna"
+  ],
+  "items": [
+    {
+      "artist": "The Mountain Goats",
+      "event": "The Mountain Goats at the Fillmore",
+      "showDate": "2026-11-18",
+      "venue": "The Fillmore",
+      "city": "San Francisco, CA",
+      "presales": [],
+      "ticketUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-18",
+      "sourceUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-18",
+      "note": "Part of a Fillmore run this week; tickets already on sale.",
+      "foundAt": "2026-11-17T05:46:45Z"
+    },
+    {
+      "artist": "The Mountain Goats",
+      "event": "The Mountain Goats at the Fillmore",
+      "showDate": "2026-11-19",
+      "venue": "The Fillmore",
+      "city": "San Francisco, CA",
+      "presales": [],
+      "ticketUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-19",
+      "sourceUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-19",
+      "note": "Part of a Fillmore run this week; tickets already on sale.",
+      "foundAt": "2026-11-17T05:46:45Z"
+    },
+    {
+      "artist": "The Mountain Goats",
+      "event": "The Mountain Goats at the Fillmore",
+      "showDate": "2026-11-20",
+      "venue": "The Fillmore",
+      "city": "San Francisco, CA",
+      "presales": [],
+      "ticketUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-20",
+      "sourceUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-20",
+      "note": "Part of a Fillmore run this week; tickets already on sale.",
+      "foundAt": "2026-11-17T05:46:45Z"
+    },
+    {
+      "artist": "The Mountain Goats",
+      "event": "The Mountain Goats at the Fillmore",
+      "showDate": "2026-11-21",
+      "venue": "The Fillmore",
+      "city": "San Francisco, CA",
+      "presales": [],
+      "ticketUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-21",
+      "sourceUrl": "https://www.stereoboard.com/the-mountain-goats-tickets/san-francisco/2026-11-21",
+      "note": "Part of a Fillmore run this week; tickets already on sale.",
+      "foundAt": "2026-11-17T05:46:45Z"
+    }
+  ]
 }
