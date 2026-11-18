@@ -566,24 +566,29 @@ async function artistSuggest(q) {
 
 // Temporary: which map sources answer from Cloudflare?
 async function debugMap() {
-  const q = `[out:json][timeout:10];nwr["amenity"="music_venue"](30.20,-97.80,30.33,-97.68);out center tags 50;`;
-  const eps = ["https://overpass-api.de/api/interpreter", "https://lz4.overpass-api.de/api/interpreter", "https://z.overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.osm.ch/api/interpreter"];
   const out = {};
-  await Promise.all(eps.map(async (ep) => {
+  const vb = "-97.90,30.42,-97.58,30.12"; // Austin box
+  const tests = {
+    nomi_amenity: `https://nominatim.openstreetmap.org/search?amenity=music_venue&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
+    nomi_q_bracket: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent("[music_venue]")}&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
+    nomi_q_nightclub: `https://nominatim.openstreetmap.org/search?q=nightclub&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
+    nomi_q_music_venue: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent("music venue")}&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
+  };
+  for (const [k, u] of Object.entries(tests)) {
     const t = Date.now();
     try {
-      const r = await fetch(ep, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(15000) });
-      const txt = await r.text();
-      let n = null; try { n = JSON.parse(txt).elements.length; } catch {}
-      out[ep] = `${r.status} in ${Date.now() - t}ms, ${n === null ? "not json: " + txt.slice(0, 60) : n + " venues"}`;
-    } catch (e) { out[ep] = `error after ${Date.now() - t}ms: ${String(e.message || e).slice(0, 60)}`; }
-  }));
-  const sparql = `SELECT ?v ?vLabel ?site WHERE { SERVICE wikibase:around { ?v wdt:P625 ?loc. bd:serviceParam wikibase:center "Point(-97.7431 30.2672)"^^geo:wktLiteral; wikibase:radius "40". } VALUES ?cls { wd:Q8719053 wd:Q1060829 wd:Q622425 wd:Q24354 wd:Q57660343 } ?v wdt:P31 ?cls; wdt:P856 ?site. SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } } LIMIT 200`;
+      const r = await fetch(u, { headers: { "User-Agent": UA, Referer: "https://calvin339.github.io/ticket-finder/" }, signal: AbortSignal.timeout(12000) });
+      const txt = await r.text(); let d = null; try { d = JSON.parse(txt); } catch {}
+      out[k] = d ? `${r.status} ${Date.now() - t}ms ${d.length} results, ${d.filter((x) => x.extratags && (x.extratags.website || x.extratags["contact:website"])).length} with website: ` + d.slice(0, 10).map((x) => `${x.name} [${x.type}]`).join(", ") : `${r.status} ${txt.slice(0, 80)}`;
+    } catch (e) { out[k] = "error " + String(e.message || e).slice(0, 60); }
+    await new Promise((r) => setTimeout(r, 1100));
+  }
+  const sparql = `SELECT DISTINCT ?v ?vLabel ?site WHERE { SERVICE wikibase:around { ?v wdt:P625 ?loc. bd:serviceParam wikibase:center "Point(-97.7431 30.2672)"^^geo:wktLiteral; wikibase:radius "40". } ?v wdt:P856 ?site; wdt:P31 ?c. ?c wdt:P279* ?cls. VALUES ?cls { wd:Q8719053 wd:Q1060829 wd:Q622425 wd:Q24354 wd:Q11315 wd:Q18674739 wd:Q41253 } SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } } LIMIT 300`;
   const t = Date.now();
   try {
-    const r = await fetch("https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(sparql), { headers: { "User-Agent": UA, Accept: "application/sparql-results+json" }, signal: AbortSignal.timeout(15000) });
+    const r = await fetch("https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(sparql), { headers: { "User-Agent": UA, Accept: "application/sparql-results+json" }, signal: AbortSignal.timeout(20000) });
     const d = await r.json();
-    out.wikidata = `${r.status} in ${Date.now() - t}ms, ${d.results.bindings.length} venues: ` + d.results.bindings.slice(0, 12).map((b) => b.vLabel.value).join(", ");
-  } catch (e) { out.wikidata = `error after ${Date.now() - t}ms: ${String(e.message || e).slice(0, 60)}`; }
+    out.wikidata_broad = `${r.status} in ${Date.now() - t}ms, ${d.results.bindings.length}: ` + d.results.bindings.slice(0, 40).map((b) => b.vLabel.value).join(", ");
+  } catch (e) { out.wikidata_broad = `error after ${Date.now() - t}ms: ${String(e.message || e).slice(0, 60)}`; }
   return out;
 }
