@@ -1,0 +1,53 @@
+name: Deploy search worker
+
+# Deploys worker/ to Cloudflare Workers when it changes, and records its address in worker.json for the site.
+# Needs repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. Optional: TM_API_KEY (Ticketmaster).
+on:
+  push:
+    branches: [main]
+    paths: ["worker/**", ".github/workflows/deploy-worker.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: deploy
+
+      - name: Set the Ticketmaster key (if provided)
+        env:
+          TM_API_KEY: ${{ secrets.TM_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        working-directory: worker
+        run: |
+          if [ -n "$TM_API_KEY" ]; then
+            printf '%s' "$TM_API_KEY" | npx --yes wrangler@3 secret put TM_API_KEY
+          else
+            echo "No TM_API_KEY secret yet; Ticketmaster stays off."
+          fi
+
+      - name: Save the worker's address for the site
+        env:
+          URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          echo "Deployed to: $URL"
+          if [ -z "$URL" ]; then echo "::error::No deployment URL. Does the Cloudflare account have a workers.dev subdomain?"; exit 1; fi
+          printf '{\n  "url": "%s"\n}\n' "$URL" > worker.json
+          if [ -n "$(git status --porcelain worker.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add worker.json && git commit -m "Record search worker address" && git pull --rebase -q origin main && git push
+          fi

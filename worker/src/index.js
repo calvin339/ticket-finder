@@ -1,0 +1,325 @@
+// Ticket Finder search worker (Cloudflare Workers).
+//
+// GET /search?artists=A|B&lat=37.77&lon=-122.42&radius=50
+//   Reads Bay Area venue websites (and the Ticketmaster API when TM_API_KEY is set)
+//   and returns upcoming shows for those artists with presale / on-sale times.
+// GET /artists?q=name   Artist suggestions with photos (Deezer's public catalog).
+// GET /venues           The venues this worker reads.
+//
+// Venue pages are cached for 20 minutes so repeated searches stay fast and polite.
+
+import { VENUES } from "./venues.js";
+
+const ALLOWED_ORIGINS = ["https://calvin339.github.io"];
+const PAGE_TTL = 20 * 60; // seconds
+const UA = "Mozilla/5.0 (compatible; TicketFinder/1.0; +https://calvin339.github.io/ticket-finder/)";
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const origin = request.headers.get("Origin") || "";
+    const cors = {
+      "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) || origin.startsWith("http://127.0.0.1") || origin.startsWith("http://localhost") ? origin : ALLOWED_ORIGINS[0],
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Vary": "Origin",
+    };
+    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+    try {
+      if (url.pathname === "/search") return json(await search(url, env, ctx), cors);
+      if (url.pathname === "/artists") return json(await artistSuggest(url.searchParams.get("q") || ""), cors, 3600);
+      if (url.pathname === "/venues") return json({ venues: VENUES.map(({ name, city, lat, lon, kind }) => ({ name, city, lat, lon, kind })) }, cors, 3600);
+      return json({ ok: true, endpoints: ["/search", "/artists", "/venues"] }, cors);
+    } catch (e) {
+      return json({ error: String(e && e.message || e) }, cors, 0, 500);
+    }
+  },
+};
+
+function json(data, cors, maxAge = 0, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": maxAge ? `public, max-age=${maxAge}` : "no-store", ...cors },
+  });
+}
+
+// ---------------------------------------------------------------- helpers
+export const norm = (s) => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+const decodeEntities = (s) => String(s || "")
+  .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+  .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ");
+const stripTags = (s) => decodeEntities(String(s || "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+
+function milesBetween(a, b) {
+  const R = 3958.8, rad = (x) => (x * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Does this show belong to the artist? Whole-word match on the artist's name.
+export function matchesArtist(artist, ...texts) {
+  const a = norm(artist);
+  if (!a) return false;
+  const re = new RegExp(`(^| )${a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}( |$)`);
+  return texts.some((t) => re.test(norm(t)));
+}
+
+// Pacific-time wall clock → UTC ISO string (venues here are all in America/Los_Angeles).
+function tzOffsetMs(ts, tz) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date(ts));
+  const g = (k) => +parts.find((x) => x.type === k).value;
+  return Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute"), g("second")) - ts;
+}
+export function localToIso(y, mo, d, h = 0, mi = 0, tz = "America/Los_Angeles") {
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  let utc = guess - tzOffsetMs(guess, tz);
+  utc = guess - tzOffsetMs(utc, tz);
+  return new Date(utc).toISOString();
+}
+// A month/day with no year: the next occurrence on or after ~2 months ago.
+export function inferYear(mo, d, now = new Date()) {
+  const y = now.getUTCFullYear();
+  const cand = new Date(Date.UTC(y, mo - 1, d));
+  return cand.getTime() < now.getTime() - 60 * 86400000 ? y + 1 : y;
+}
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function parseClock(s) {
+  const m = /(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)/i.exec(s || "");
+  if (!m) return null;
+  let h = +m[1] % 12; if (/p/i.test(m[3])) h += 12;
+  return { h, mi: +(m[2] || 0) };
+}
+
+async function fetchPage(url, ctx) {
+  const cache = caches.default;
+  const key = new Request(url, { method: "GET" });
+  const hit = await cache.match(key);
+  if (hit) return { html: await hit.text(), cached: true, status: hit.status };
+  const res = await fetch(url, { headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" }, redirect: "follow", cf: { cacheTtl: 0 } });
+  const html = await res.text();
+  if (res.ok) {
+    const copy = new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": `public, max-age=${PAGE_TTL}` } });
+    ctx.waitUntil(cache.put(key, copy));
+  }
+  return { html, cached: false, status: res.status };
+}
+
+// ---------------------------------------------------------------- venue parsers
+// Each returns [{ title, names:[...], showDate, showTime, presales:[{name,start,end,code,dateOnly}], generalOnsale, generalOnsaleDateOnly, ticketUrl, sourceUrl, status }]
+
+// Live Nation venue sites (Next.js): the full Ticketmaster event records are embedded in the page.
+export function parseLiveNation(html, venue) {
+  const chunks = [...html.matchAll(/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g)].map((m) => { try { return JSON.parse(m[1]); } catch { return ""; } });
+  const txt = chunks.join("");
+  const out = new Map();
+  let idx = 0;
+  while ((idx = txt.indexOf('"events":[', idx)) !== -1) {
+    const start = idx + '"events":'.length;
+    const end = matchBracket(txt, start);
+    idx = start;
+    if (end < 0) continue;
+    let arr; try { arr = JSON.parse(txt.slice(start, end + 1)); } catch { continue; }
+    for (const e of arr) {
+      if (!e || typeof e !== "object" || !e.discovery_id || out.has(e.discovery_id)) continue;
+      const names = [e.name, ...(e.artists || []).map((a) => a.name)].filter(Boolean);
+      out.set(e.discovery_id, {
+        title: e.name, names,
+        showDate: e.start_date_local || null, showTime: e.start_time_local && e.start_time_local !== "00:00:01" ? e.start_time_local.slice(0, 5) : null,
+        presales: (e.presales || []).filter((p) => p.start_datetime_utc).map((p) => ({ name: p.description || "Presale", start: p.start_datetime_utc, end: p.end_datetime_utc || null, code: p.passcode || null })),
+        generalOnsale: e.sales_start_datetime_utc || null, generalOnsaleDateOnly: false,
+        ticketUrl: e.url || null, sourceUrl: venue.url, status: e.status_code || "",
+      });
+    }
+  }
+  return [...out.values()];
+}
+function matchBracket(s, i) {
+  const open = s[i], close = open === "[" ? "]" : "}";
+  let depth = 0, inStr = false;
+  for (let j = i; j < s.length; j++) {
+    const c = s[j];
+    if (inStr) { if (c === "\\") j++; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === open) depth++;
+    else if (c === close && --depth === 0) return j;
+  }
+  return -1;
+}
+
+// TicketWeb's WordPress plugin (The Independent, August Hall, Brick & Mortar…).
+export function parseTicketWeb(html, venue, now = new Date()) {
+  // Two layouts: list rows ("row tw-event-item", date "11.17") and grid cards ("tw-section", date "Nov 17").
+  const blocks = html.includes('class="row tw-event-item"') ? html.split(/class="row tw-event-item"/).slice(1) : html.split(/class="tw-section"/).slice(1);
+  const out = [];
+  for (const b of blocks) {
+    const nameM = /class="tw-name">\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(b);
+    if (!nameM) continue;
+    let mo, d;
+    const date = /class="tw-event-date">\s*([\d]{1,2})\.(\d{1,2})/.exec(b);
+    const gridDate = /class="tw-image-date">\s*([A-Za-z]{3})[a-z]*\.?\s*(?:<[^>]+>)?\s*(\d{1,2})/.exec(b);
+    if (date) { mo = +date[1]; d = +date[2]; }
+    else if (gridDate && MONTHS[gridDate[1].toLowerCase()]) { mo = MONTHS[gridDate[1].toLowerCase()]; d = +gridDate[2]; }
+    else continue;
+    const y = inferYear(mo, d, now);
+    const att = /class="tw-attractions">([\s\S]*?)<\/div>/.exec(b);
+    const time = /class="tw-event-time">([^<]*)</.exec(b);
+    const btn = /<a[^>]*class="[^"]*tw-buy-tix-btn[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(b) || /<a[^>]*href="([^"]+)"[^>]*class="[^"]*tw-buy-tix-btn[^"]*"[^>]*>([\s\S]*?)<\/a>/.exec(b);
+    const btnText = btn ? stripTags(btn[2]) : "";
+    let generalOnsale = null, dateOnly = false;
+    const sale = /on\s*sale\s*(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?(?:\s*(?:@|at)?\s*(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?))?/i.exec(btnText);
+    if (sale) {
+      const smo = +sale[1], sd = +sale[2], sy = sale[3] ? (+sale[3] < 100 ? 2000 + +sale[3] : +sale[3]) : inferYear(smo, sd, now);
+      const clock = parseClock(sale[4]);
+      generalOnsale = localToIso(sy, smo, sd, clock ? clock.h : 10, clock ? clock.mi : 0);
+      dateOnly = !clock;
+    }
+    const clock = parseClock(time && time[1]);
+    const title = stripTags(nameM[2]);
+    const support = att ? stripTags(att[1]).replace(/^with\s+/i, "") : "";
+    out.push({
+      title, names: [title, ...support.split(/,|\band\b|&/).map((s) => s.trim()).filter(Boolean)],
+      showDate: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`, showTime: clock ? `${String(clock.h).padStart(2, "0")}:${String(clock.mi).padStart(2, "0")}` : null,
+      presales: [], generalOnsale, generalOnsaleDateOnly: dateOnly,
+      ticketUrl: btn ? decodeEntities(btn[1]) : decodeEntities(nameM[1]), sourceUrl: decodeEntities(nameM[1]), status: sale ? "upcoming" : "onsale",
+    });
+  }
+  return out;
+}
+
+// Another Planet venue sites (Fox Oakland, Greek Theatre Berkeley).
+export function parseAnotherPlanet(html, venue, now = new Date()) {
+  const out = new Map();
+  // List rows: <div class="mix detail-information"> … show-title … startDate content="April 30, 2027 8:00 pm" … button text "PRESALE 11/19" / "ON SALE 11/20"
+  const rows = html.split(/class="mix detail-information"|<li class="carousel item">/).slice(1);
+  for (const r of rows) {
+    const t = /class="show-title"[^>]*>([\s\S]*?)<\/h2>/.exec(r);
+    const sd = /itemprop="startDate" content="([A-Za-z]+) (\d{1,2}), (\d{4})(?: (\d{1,2}:\d{2}\s*[ap]m))?"/i.exec(r);
+    if (!t || !sd) continue;
+    const mo = MONTHS[sd[1].slice(0, 3).toLowerCase()], d = +sd[2], y = +sd[3];
+    const link = /href="(https?:\/\/[^"]+\/events\/[^"]+)"/.exec(r);
+    const tix = /href="(https:\/\/www\.ticketmaster\.com[^"]+)"/.exec(r);
+    const title = stripTags(t[1]);
+    const support = /class="support">([\s\S]*?)<\/div>/.exec(r);
+    const text = stripTags(r);
+    const presales = [];
+    let generalOnsale = null, generalDateOnly = false;
+    // "Presale begins Wednesday, 11/18 at 10am!"  /  button "PRESALE 11/19"
+    const pre = /presale(?: begins)?(?:[^0-9]{0,20})?(\d{1,2})\/(\d{1,2})(?:\s*(?:at|@)\s*(\d{1,2}(?::\d{2})?\s*[ap]m))?/i.exec(text);
+    if (pre) {
+      const pmo = +pre[1], pd = +pre[2], clock = parseClock(pre[3]);
+      presales.push({ name: "Presale", start: localToIso(inferYear(pmo, pd, now), pmo, pd, clock ? clock.h : 10, clock ? clock.mi : 0), end: null, code: null, dateOnly: !clock });
+    }
+    const on = /on\s*sale(?:[^0-9]{0,20})?(\d{1,2})\/(\d{1,2})(?:\s*(?:at|@)\s*(\d{1,2}(?::\d{2})?\s*[ap]m))?/i.exec(text);
+    if (on) {
+      const omo = +on[1], od = +on[2], clock = parseClock(on[3]);
+      generalOnsale = localToIso(inferYear(omo, od, now), omo, od, clock ? clock.h : 10, clock ? clock.mi : 0); generalDateOnly = !clock;
+    }
+    const key = (link && link[1]) || `${title}|${y}-${mo}-${d}`;
+    const prev = out.get(key);
+    const clock = parseClock(sd[4]);
+    const item = {
+      title, names: [title, ...(support ? stripTags(support[1]).replace(/^with special guests?\s*/i, "").split(/,|&|\band\b/).map((s) => s.trim()).filter(Boolean) : [])],
+      showDate: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`, showTime: clock ? `${String(clock.h).padStart(2, "0")}:${String(clock.mi).padStart(2, "0")}` : null,
+      presales, generalOnsale, generalOnsaleDateOnly: generalDateOnly,
+      ticketUrl: tix ? decodeEntities(tix[1]) : (link ? link[1] : null), sourceUrl: link ? link[1] : venue.url, status: presales.length || generalOnsale ? "upcoming" : "",
+    };
+    // A show can appear twice (featured carousel + list): keep the best details from both.
+    if (!prev) { out.set(key, item); continue; }
+    const better = (a, b) => (!a.length ? b : !b.length ? a : (a[0].dateOnly && !b[0].dateOnly ? b : a));
+    out.set(key, {
+      ...prev,
+      presales: better(prev.presales, item.presales),
+      generalOnsale: prev.generalOnsale && !prev.generalOnsaleDateOnly ? prev.generalOnsale : item.generalOnsale || prev.generalOnsale,
+      generalOnsaleDateOnly: prev.generalOnsale && !prev.generalOnsaleDateOnly ? false : item.generalOnsale ? item.generalOnsaleDateOnly : prev.generalOnsaleDateOnly,
+      ticketUrl: /ticketmaster\.com/.test(prev.ticketUrl || "") ? prev.ticketUrl : item.ticketUrl || prev.ticketUrl,
+      names: prev.names.length >= item.names.length ? prev.names : item.names,
+      status: prev.status || item.status,
+    });
+  }
+  return [...out.values()];
+}
+
+export const PARSERS = { livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet };
+
+// ---------------------------------------------------------------- Ticketmaster
+async function ticketmaster(env, artists, loc, radius) {
+  if (!env.TM_API_KEY) return { status: "no key", events: [] };
+  const base = "https://app.ticketmaster.com/discovery/v2";
+  const events = [];
+  for (const artist of artists) {
+    const q = new URLSearchParams({ apikey: env.TM_API_KEY, keyword: artist, classificationName: "music", size: "5" });
+    const a = await (await fetch(`${base}/attractions.json?${q}`)).json();
+    const hit = (a?._embedded?.attractions || []).find((x) => norm(x.name) === norm(artist));
+    const p = new URLSearchParams({ apikey: env.TM_API_KEY, latlong: `${loc.lat},${loc.lon}`, radius: String(radius), unit: "miles", size: "100", sort: "date,asc", includeTBA: "yes", includeTBD: "yes" });
+    if (hit) p.set("attractionId", hit.id); else { p.set("keyword", artist); p.set("classificationName", "music"); }
+    const r = await (await fetch(`${base}/events.json?${p}`)).json();
+    for (const e of r?._embedded?.events || []) {
+      const v = e._embedded?.venues?.[0] || {};
+      const names = [e.name, ...(e._embedded?.attractions || []).map((x) => x.name)];
+      if (!hit && !matchesArtist(artist, ...names)) continue;
+      events.push({
+        artist, source: "Ticketmaster", title: e.name, venue: v.name || "", city: [v.city?.name, v.state?.stateCode].filter(Boolean).join(", "),
+        showDate: e.dates?.start?.localDate || null, showTime: e.dates?.start?.localTime?.slice(0, 5) || null,
+        presales: (e.sales?.presales || []).filter((x) => x.startDateTime).map((x) => ({ name: x.name || "Presale", start: x.startDateTime, end: x.endDateTime || null, code: null })),
+        generalOnsale: e.sales?.public?.startTBD ? null : e.sales?.public?.startDateTime || null, generalOnsaleDateOnly: false,
+        ticketUrl: e.url || null, sourceUrl: e.url || null, status: e.dates?.status?.code || "",
+      });
+    }
+    await new Promise((res) => setTimeout(res, 220)); // stay under 5 requests/second
+  }
+  return { status: "ok", events };
+}
+
+// ---------------------------------------------------------------- search
+async function search(url, env, ctx) {
+  const artists = (url.searchParams.get("artists") || "").split("|").map((s) => s.trim()).filter(Boolean).slice(0, 40);
+  const lat = +url.searchParams.get("lat"), lon = +url.searchParams.get("lon");
+  const radius = Math.min(250, Math.max(5, +url.searchParams.get("radius") || 50));
+  if (!artists.length || !isFinite(lat) || !isFinite(lon)) return { error: "Need artists, lat and lon." };
+  const loc = { lat, lon };
+  const venues = VENUES.filter((v) => milesBetween(loc, v) <= radius);
+  const sources = {};
+  const found = [];
+  const now = new Date();
+
+  await Promise.all(venues.map(async (v) => {
+    try {
+      const page = await fetchPage(v.url, ctx);
+      if (page.status >= 400) { sources[v.name] = `blocked (${page.status})`; return; }
+      const shows = PARSERS[v.kind](page.html, v, now);
+      sources[v.name] = `${shows.length} shows`;
+      for (const s of shows) for (const a of artists) {
+        if (matchesArtist(a, ...s.names)) found.push({ artist: a, source: v.name, venue: v.name, city: v.city, ...s });
+      }
+    } catch (e) { sources[v.name] = `error: ${String(e.message || e).slice(0, 80)}`; }
+  }));
+
+  try {
+    const tm = await ticketmaster(env, artists, loc, radius);
+    sources.Ticketmaster = tm.status === "ok" ? `${tm.events.length} matches` : tm.status;
+    found.push(...tm.events);
+  } catch (e) { sources.Ticketmaster = `error: ${String(e.message || e).slice(0, 80)}`; }
+
+  // Drop past shows; merge the same show seen on a venue site and on Ticketmaster.
+  const today = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const merged = [];
+  for (const e of found.filter((e) => !e.showDate || e.showDate >= today)) {
+    const twin = merged.find((m) => m.artist === e.artist && m.showDate === e.showDate && (norm(m.venue) === norm(e.venue) || norm(m.venue).split(" ")[0] === norm(e.venue).split(" ")[0]));
+    if (!twin) { merged.push({ ...e, sources: [e.source] }); continue; }
+    twin.sources.push(e.source);
+    if (!twin.presales.length && e.presales.length) twin.presales = e.presales;
+    if ((!twin.generalOnsale || twin.generalOnsaleDateOnly) && e.generalOnsale && !e.generalOnsaleDateOnly) { twin.generalOnsale = e.generalOnsale; twin.generalOnsaleDateOnly = false; }
+    if (!twin.ticketUrl) twin.ticketUrl = e.ticketUrl;
+  }
+  merged.sort((a, b) => String(a.showDate).localeCompare(String(b.showDate)));
+  return { checkedAt: now.toISOString(), venuesChecked: venues.length, sources, events: merged.map(({ names, ...rest }) => rest) };
+}
+
+// ---------------------------------------------------------------- artist suggestions
+async function artistSuggest(q) {
+  q = q.trim().slice(0, 80);
+  if (q.length < 2) return { artists: [] };
+  const r = await fetch(`https://api.deezer.com/search/artist?${new URLSearchParams({ q, limit: "8" })}`, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  const d = await r.json();
+  return { artists: (d.data || []).map((a) => ({ name: a.name, img: a.picture_medium || null, fans: a.nb_fan ?? null })) };
+}
