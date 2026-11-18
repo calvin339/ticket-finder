@@ -512,7 +512,7 @@ export async function runSearch(q, env, ctx) {
     try {
       near = await venuesNear(loc, radius, env, async (ep, body) => {
         spend(budget);
-        const r = await fetch(ep, { method: "POST", body, headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" } });
+        const r = await fetch(ep, { method: "POST", body, headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" }, signal: AbortSignal.timeout(18000) });
         if (!r.ok) throw new Error(`map lookup ${r.status}`);
         return r.json();
       });

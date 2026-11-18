@@ -7,7 +7,7 @@
 
 import { PARSERS, stripTags, localToIso, extractSaleTimes } from "./index.js";
 
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
+const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
 const AREA_TTL = 7 * 86400 * 1000, SITE_TTL = 3 * 86400 * 1000, FAIL_TTL = 2 * 86400 * 1000;
 export const MAX_DISCOVERED = 20;
 const MAX_AREA_MILES = 25;
@@ -50,13 +50,18 @@ export async function venuesNear(loc, radius, env, fetchJson) {
   const areaKey = `disc:${loc.lat.toFixed(2)},${loc.lon.toFixed(2)},${Math.round(r)}`;
   const cached = env.SUBS ? await env.SUBS.get(areaKey, "json").catch(() => null) : null;
   if (cached && Date.now() - cached.at < AREA_TTL) return cached.venues;
-  const m = Math.round(r * 1609);
-  const q = `[out:json][timeout:20];(nwr["amenity"~"^(music_venue|concert_hall|nightclub|theatre|arts_centre|events_venue)$"](around:${m},${loc.lat},${loc.lon});nwr["live_music"="yes"](around:${m},${loc.lat},${loc.lon}););out center tags 600;`;
-  let data = null, lastErr;
+  // A map rectangle around the spot (much faster for the map servers than a radius search).
+  const dLat = r / 69, dLon = r / (69 * Math.max(0.2, Math.cos((loc.lat * Math.PI) / 180)));
+  const bbox = [loc.lat - dLat, loc.lon - dLon, loc.lat + dLat, loc.lon + dLon].map((x) => x.toFixed(4)).join(",");
+  const parts = ["music_venue", "concert_hall", "nightclub", "theatre", "arts_centre", "events_venue"].map((a) => `nwr["amenity"="${a}"](${bbox});`).join("") + `nwr["live_music"="yes"](${bbox});`;
+  const q = `[out:json][timeout:15];(${parts});out center tags 800;`;
+  let data = null;
+  const errs = [];
   for (const ep of OVERPASS) {
-    try { data = await fetchJson(ep, "data=" + encodeURIComponent(q)); if (data && data.elements) break; } catch (e) { lastErr = e; if (e && e.budget) throw e; }
+    try { data = await fetchJson(ep, "data=" + encodeURIComponent(q)); if (data && data.elements) break; }
+    catch (e) { if (e && e.budget) throw e; errs.push(`${new URL(ep).hostname.split(".").slice(-2, -1)[0]} ${String(e.message || e).replace(/^map lookup /, "").slice(0, 30)}`); }
   }
-  if (!data || !data.elements) throw lastErr || new Error("map lookup failed");
+  if (!data || !data.elements) throw new Error(`map servers busy (${errs.join("; ")})`);
   const seen = new Set();
   const venues = [];
   for (const el of data.elements) {
