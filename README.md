@@ -10,7 +10,13 @@ Know when tickets go on sale for the artists you love, near you.
 - Artist suggestions and photos come from Deezer's public catalog (through the worker); typo fixes from MusicBrainz.
 
 ## Venues
-Listed in `worker/src/venues.js`. Supported site types:
+**Anywhere:** each search looks up music venues, live-music bars, theatres and clubs near the location on OpenStreetMap
+(`worker/src/discover.js`), up to 20 per search. For each venue's website it recognizes the layout (schema.org event data,
+Live Nation, TicketWeb, SeeTickets, …), following an "Events"/"Calendar" link if needed, and remembers what worked.
+For matching shows it opens the show's page to look for presale / on-sale times. Sites that load their shows with
+JavaScript, or block automated requests, can't be read.
+
+**Bay Area (hand-tuned):** Listed in `worker/src/venues.js`. Supported site types:
 - `livenation`: Live Nation venue sites (full presale and on-sale times, presale codes)
 - `ticketweb`: TicketWeb's venue plugin (on-sale dates)
 - `anotherplanet`: Another Planet venue sites (presale dates, sometimes times)

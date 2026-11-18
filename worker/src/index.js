@@ -12,6 +12,7 @@
 
 import { VENUES } from "./venues.js";
 import { handleAlertsRequest, runAlerts } from "./alerts.js";
+import { venuesNear, readFoundVenue, parseJsonLd, parseGenericDetail, tzFor, MAX_DISCOVERED } from "./discover.js";
 
 const ALLOWED_ORIGINS = ["https://calvin339.github.io"];
 const PAGE_TTL = 20 * 60; // seconds
@@ -58,7 +59,7 @@ export const norm = (s) => String(s || "").toLowerCase().normalize("NFKD").repla
 const decodeEntities = (s) => String(s || "")
   .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
   .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#039;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ");
-const stripTags = (s) => decodeEntities(String(s || "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+export const stripTags = (s) => decodeEntities(String(s || "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 
 function milesBetween(a, b) {
   const R = 3958.8, rad = (x) => (x * Math.PI) / 180;
@@ -101,11 +102,20 @@ function parseClock(s) {
   return { h, mi: +(m[2] || 0) };
 }
 
-async function fetchPage(url, ctx) {
+// Cloudflare's free plan allows 50 outside requests per search, so each search has a budget.
+const MAX_REQUESTS = 46;
+function spend(budget) {
+  if (!budget) return;
+  if (budget.left <= 0) { const e = new Error("search limit reached"); e.budget = true; throw e; }
+  budget.left--;
+}
+async function fetchPage(url, ctx, budget) {
   const cache = caches.default;
   const key = new Request(url, { method: "GET" });
+  spend(budget);
   const hit = await cache.match(key);
   if (hit) return { html: await hit.text(), cached: true, status: hit.status };
+  spend(budget);
   const res = await fetch(url, { headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" }, redirect: "follow", cf: { cacheTtl: 0 } });
   const html = await res.text();
   if (res.ok) {
@@ -261,7 +271,7 @@ export function parseAnotherPlanet(html, venue, now = new Date()) {
 // Pull presale / on-sale times out of a show page's text, e.g.
 //   "Artist presale Wed Nov 18 · 10 AM   On sale Fri Nov 20 · 10 AM"
 //   "Tickets will go on sale 11/18/2026 10:00:00 AM PST"
-export function extractSaleTimes(text, now = new Date()) {
+export function extractSaleTimes(text, now = new Date(), tz = "America/Los_Angeles") {
   const presales = [];
   let general = null;
   const t = String(text || "").replace(/\s+/g, " ");
@@ -269,7 +279,7 @@ export function extractSaleTimes(text, now = new Date()) {
   const num = /on sale (\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2})(?::\d{2})? ?([AP]M)/i.exec(t);
   if (num) {
     let h = +num[4] % 12; if (/p/i.test(num[6])) h += 12;
-    general = { start: localToIso(+num[3], +num[1], +num[2], h, +num[5]), dateOnly: false };
+    general = { start: localToIso(+num[3], +num[1], +num[2], h, +num[5], tz), dateOnly: false };
   }
   // Word form: "[label] presale|on sale [Dow,] Mon DD[, YYYY] [·|at|@|,] [10 AM]"
   const re = /((?:[A-Za-z][\w&.'’-]*\s){0,3})?\b(pre-?sale|on sale)\s*:?\s*(?:begins\s*)?(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?(?:\s*(?:·|at|@|,|-)?\s*(\d{1,2}(?::\d{2})?\s*[ap]\.?\s?m\.?))?/gi;
@@ -278,7 +288,7 @@ export function extractSaleTimes(text, now = new Date()) {
     const mo = MONTHS[m[3].toLowerCase()], d = +m[4];
     const y = m[5] ? +m[5] : inferYear(mo, d, now);
     const clock = parseClock(m[6]);
-    const start = localToIso(y, mo, d, clock ? clock.h : 10, clock ? clock.mi : 0);
+    const start = localToIso(y, mo, d, clock ? clock.h : 10, clock ? clock.mi : 0, tz);
     if (/pre/i.test(m[2])) {
       const kind = /(artist|fan club|fan|venue|spotify|local|amex|american express|citi|vip|member|ticketmaster|live nation|official platinum)\s*$/i.exec((m[1] || "").trim());
       const label = kind ? kind[1].replace(/^\w/, (c) => c.toUpperCase()) + " presale" : "Presale";
@@ -410,9 +420,9 @@ export function parseUCTheatre(html, venue, now = new Date()) {
   }
   return out;
 }
-export const PARSERS = { livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill, uctheatre: parseUCTheatre };
+export const PARSERS = { jsonld: parseJsonLd, livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill, uctheatre: parseUCTheatre };
 // For site types whose list pages lack on-sale times: read a matching show's own page.
-export const DETAIL_PARSERS = { seetickets: parseSeeTicketsDetail, billja: parseBillJaDetail };
+export const DETAIL_PARSERS = { seetickets: parseSeeTicketsDetail, billja: parseBillJaDetail, jsonld: (html, show, now, venue) => parseGenericDetail(html, show, now, venue && venue.tz) };
 const MAX_DETAIL_PAGES = 12;
 
 // ---------------------------------------------------------------- Ticketmaster
@@ -462,28 +472,65 @@ export async function runSearch(q, env, ctx) {
   const found = [];
   const now = new Date();
   const detailBudget = { n: MAX_DETAIL_PAGES };
+  const budget = { left: Math.min(MAX_REQUESTS, +q.maxRequests || MAX_REQUESTS) };
+  const tz = tzFor(lat, lon);
+  const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+  const curatedHosts = new Set(VENUES.flatMap((v) => [v.url, ...(v.extraUrls || [])]).map(hostOf));
 
-  await Promise.all(venues.map(async (v) => {
+  const collect = async (v, shows) => {
+    for (const s of shows) for (const a of artists) {
+      if (!matchesArtist(a, ...s.names)) continue;
+      let show = s;
+      const detail = DETAIL_PARSERS[v.kind];
+      if (detail && s.detailUrl && detailBudget.n > 0 && budget.left > 4) {
+        detailBudget.n--;
+        try { const d = await fetchPage(s.detailUrl, ctx, budget); if (d.status < 400) show = { ...s, ...detail(d.html, s, now, v) }; } catch {}
+      }
+      const { venueOverride, detailUrl, ...rest } = show;
+      found.push({ artist: a, source: v.name, venue: venueOverride || v.name, city: v.city, ...rest });
+    }
+  };
+
+  // Hand-tuned Bay Area venues
+  const curated = Promise.all(venues.map(async (v) => {
     try {
-      const page = await fetchPage(v.url, ctx);
+      const page = await fetchPage(v.url, ctx, budget);
       if (page.status >= 400) { sources[v.name] = `blocked (${page.status})`; return; }
       const shows = PARSERS[v.kind](page.html, v, now);
       for (const extra of v.extraUrls || []) {
-        try { const p2 = await fetchPage(extra, ctx); if (p2.status < 400) shows.push(...PARSERS[v.kind](p2.html, v, now)); } catch {}
+        try { const p2 = await fetchPage(extra, ctx, budget); if (p2.status < 400) shows.push(...PARSERS[v.kind](p2.html, v, now)); } catch {}
       }
       sources[v.name] = `${shows.length} shows`;
-      for (const s of shows) for (const a of artists) {
-        if (!matchesArtist(a, ...s.names)) continue;
-        let show = s;
-        const detail = DETAIL_PARSERS[v.kind];
-        if (detail && s.detailUrl && detailBudget.n-- > 0) {
-          try { const d = await fetchPage(s.detailUrl, ctx); if (d.status < 400) show = { ...s, ...detail(d.html, s, now) }; } catch {}
-        }
-        const { venueOverride, detailUrl, ...rest } = show;
-        found.push({ artist: a, source: v.name, venue: venueOverride || v.name, city: v.city, ...rest });
-      }
-    } catch (e) { sources[v.name] = `error: ${String(e.message || e).slice(0, 80)}`; }
+      await collect(v, shows);
+    } catch (e) { sources[v.name] = e.budget ? "skipped (search limit)" : `error: ${String(e.message || e).slice(0, 80)}`; }
   }));
+
+  // Venues found on the map near this location
+  let discovered = 0;
+  const auto = (async () => {
+    let near;
+    try {
+      near = await venuesNear(loc, radius, env, async (ep, body) => {
+        spend(budget);
+        const r = await fetch(ep, { method: "POST", body, headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" } });
+        if (!r.ok) throw new Error(`map lookup ${r.status}`);
+        return r.json();
+      });
+    } catch (e) { sources["Venue finder"] = `error: ${String(e.message || e).slice(0, 80)}`; return; }
+    const pick = near.filter((v) => milesBetween(loc, v) <= radius && !curatedHosts.has(v.host) && !VENUES.some((c) => milesBetween(c, v) < 0.1)).slice(0, MAX_DISCOVERED);
+    discovered = pick.length;
+    await curated; // hand-tuned venues get the request budget first
+    await Promise.all(pick.map(async (v) => {
+      const venue = { ...v, kind: "jsonld", tz };
+      try {
+        const r = await readFoundVenue(venue, env, (u) => fetchPage(u, ctx, budget), now);
+        if (r.error) { sources[v.name] = r.error; return; }
+        sources[v.name] = `${r.shows.length} shows`;
+        await collect({ ...venue, kind: r.kind }, r.shows);
+      } catch (e) { sources[v.name] = e.budget ? "skipped (search limit)" : `error: ${String(e.message || e).slice(0, 60)}`; }
+    }));
+  })();
+  await Promise.all([curated, auto]);
 
   try {
     const tm = await ticketmaster(env, artists, loc, radius);
@@ -504,7 +551,7 @@ export async function runSearch(q, env, ctx) {
     if (!twin.ticketUrl) twin.ticketUrl = e.ticketUrl;
   }
   merged.sort((a, b) => String(a.showDate).localeCompare(String(b.showDate)));
-  return { checkedAt: now.toISOString(), venuesChecked: venues.length, sources, events: merged.map(({ names, ...rest }) => rest) };
+  return { checkedAt: now.toISOString(), venuesChecked: venues.length + discovered, sources, events: merged.map(({ names, ...rest }) => rest) };
 }
 
 // ---------------------------------------------------------------- artist suggestions

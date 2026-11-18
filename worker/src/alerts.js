@@ -61,7 +61,7 @@ function eventHtml(e, extra = "") {
   const status = e.status === "onsale" ? "On sale now" : e.status === "soldout" ? "Sold out" : lines.length ? "" : "No on-sale date listed yet";
   return `<div style="margin:0 0 16px;padding:12px 14px;border:1px solid #e3e3e8;border-radius:10px">
     <div style="font-size:16px;font-weight:600">${enc(e.artist)}</div>
-    <div style="color:#555">${enc(e.venue)}, ${enc(e.city)} &middot; ${enc(fmtShow(e))}</div>
+    <div style="color:#555">${enc(e.venue)}${e.city ? ", " + enc(e.city) : ""} &middot; ${enc(fmtShow(e))}</div>
     ${extra}${lines.map((l) => `<div style="margin-top:4px">${l}</div>`).join("")}
     ${status ? `<div style="margin-top:4px;color:#555">${status}</div>` : ""}
     ${e.ticketUrl ? `<div style="margin-top:8px"><a href="${enc(e.ticketUrl)}" style="color:#4f46e5">Tickets</a></div>` : ""}
@@ -183,13 +183,14 @@ function page(title, html, status = 200) {
 // ------------------------------------------------------------------ the schedule
 export async function runAlerts(env, ctx, deps, workerUrl) {
   if (!env.SUBS || !env.BREVO_API_KEY) return { skipped: "alerts not set up" };
-  let cursor, results = [];
+  let cursor, results = [], scanned = false;
   do {
     const page = await env.SUBS.list({ prefix: "sub:", cursor });
     for (const k of page.keys) {
       const sub = await env.SUBS.get(k.name, "json");
       if (!sub || !sub.confirmed) continue;
-      try { results.push(await scanAndNotify(env, ctx, deps, sub, workerUrl, {})); }
+      // One search per run (each search uses most of the run's web-request allowance); others wait 15 minutes.
+      try { const r = await scanAndNotify(env, ctx, deps, sub, workerUrl, { allowScan: !scanned }); scanned = scanned || r.scanned; results.push(r); }
       catch (e) { console.log("alert run failed for", sub.id, e && e.message); }
     }
     cursor = page.list_complete ? null : page.cursor;
@@ -197,15 +198,15 @@ export async function runAlerts(env, ctx, deps, workerUrl) {
   return results;
 }
 
-async function scanAndNotify(env, ctx, deps, sub, workerUrl, { welcome = false }) {
+async function scanAndNotify(env, ctx, deps, sub, workerUrl, { welcome = false, allowScan = true }) {
   const now = new Date();
   const alerts = sub.alerts || DEFAULT_ALERTS;
   let changed = false;
   const out = { id: sub.id, scanned: false, emails: 0 };
 
   // 1. Search for shows (every 6 hours, or right after the artist list / location changed)
-  if (sub.artists?.length && (welcome || sub.rescan || !sub.lastScan || now - new Date(sub.lastScan) >= SCAN_EVERY_MS)) {
-    const res = await deps.runSearch({ artists: sub.artists, lat: sub.lat, lon: sub.lon, radius: sub.radius }, env, ctx);
+  if (allowScan && sub.artists?.length && (welcome || sub.rescan || !sub.lastScan || now - new Date(sub.lastScan) >= SCAN_EVERY_MS)) {
+    const res = await deps.runSearch({ artists: sub.artists, lat: sub.lat, lon: sub.lon, radius: sub.radius, maxRequests: 38 }, env, ctx);
     if (res.events) {
       const known = new Set(sub.known || []);
       const fresh = res.events.filter((e) => !known.has(eventKey(e)));
