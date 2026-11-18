@@ -291,6 +291,9 @@ async function search(url, env, ctx) {
       const page = await fetchPage(v.url, ctx);
       if (page.status >= 400) { sources[v.name] = `blocked (${page.status})`; return; }
       const shows = PARSERS[v.kind](page.html, v, now);
+      for (const extra of v.extraUrls || []) {
+        try { const p2 = await fetchPage(extra, ctx); if (p2.status < 400) shows.push(...PARSERS[v.kind](p2.html, v, now)); } catch {}
+      }
       sources[v.name] = `${shows.length} shows`;
       for (const s of shows) for (const a of artists) {
         if (matchesArtist(a, ...s.names)) found.push({ artist: a, source: v.name, venue: v.name, city: v.city, ...s });
@@ -310,8 +313,9 @@ async function search(url, env, ctx) {
   for (const e of found.filter((e) => !e.showDate || e.showDate >= today)) {
     const twin = merged.find((m) => m.artist === e.artist && m.showDate === e.showDate && (norm(m.venue) === norm(e.venue) || norm(m.venue).split(" ")[0] === norm(e.venue).split(" ")[0]));
     if (!twin) { merged.push({ ...e, sources: [e.source] }); continue; }
-    twin.sources.push(e.source);
-    if (!twin.presales.length && e.presales.length) twin.presales = e.presales;
+    if (!twin.sources.includes(e.source)) twin.sources.push(e.source);
+    const timed = (ps) => ps.length && ps.some((p) => !p.dateOnly);
+    if ((!twin.presales.length && e.presales.length) || (!timed(twin.presales) && timed(e.presales))) twin.presales = e.presales;
     if ((!twin.generalOnsale || twin.generalOnsaleDateOnly) && e.generalOnsale && !e.generalOnsaleDateOnly) { twin.generalOnsale = e.generalOnsale; twin.generalOnsaleDateOnly = false; }
     if (!twin.ticketUrl) twin.ticketUrl = e.ticketUrl;
   }

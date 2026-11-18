@@ -6,6 +6,7 @@ export const VENUES = [
   { name: "The Independent", city: "San Francisco, CA", lat: 37.7755, lon: -122.4378, kind: "ticketweb", url: "https://www.theindependentsf.com/" },
   { name: "August Hall", city: "San Francisco, CA", lat: 37.7874, lon: -122.4109, kind: "ticketweb", url: "https://www.augusthallsf.com/" },
   { name: "Brick & Mortar Music Hall", city: "San Francisco, CA", lat: 37.7697, lon: -122.4200, kind: "ticketweb", url: "https://www.brickandmortarmusic.com/" },
-  { name: "Fox Theater", city: "Oakland, CA", lat: 37.8080, lon: -122.2700, kind: "anotherplanet", url: "https://thefoxoakland.com/listing/" },
+  // The Fox's home page has exact presale times ("…at 10am"); the listing page has every show.
+  { name: "Fox Theater", city: "Oakland, CA", lat: 37.8080, lon: -122.2700, kind: "anotherplanet", url: "https://thefoxoakland.com/listing/", extraUrls: ["https://thefoxoakland.com/"] },
   { name: "Greek Theatre", city: "Berkeley, CA", lat: 37.8738, lon: -122.2546, kind: "anotherplanet", url: "https://thegreekberkeley.com/" },
 ];
