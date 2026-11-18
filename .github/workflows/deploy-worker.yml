@@ -17,6 +17,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Make sure the account has a workers.dev address
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/workers/subdomain"
+          current=$(curl -s -H "Authorization: Bearer $TOKEN" "$api" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('result') or {}).get('subdomain') or '')")
+          if [ -n "$current" ]; then echo "Already have $current.workers.dev"; exit 0; fi
+          for name in calvin339 calvin339-tickets ticket-finder-calvin339; do
+            res=$(curl -s -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data "{\"subdomain\":\"$name\"}" "$api")
+            echo "$res" | python3 -c "import sys,json; d=json.load(sys.stdin); print('ok' if d.get('success') else d.get('errors'))"
+            if echo "$res" | grep -q '"success":true'; then echo "Registered $name.workers.dev"; exit 0; fi
+          done
+          echo "::error::Couldn't register a workers.dev subdomain"; exit 1
+
       - name: Deploy
         id: deploy
         uses: cloudflare/wrangler-action@v3
@@ -34,7 +49,7 @@ jobs:
         working-directory: worker
         run: |
           if [ -n "$TM_API_KEY" ]; then
-            printf '%s' "$TM_API_KEY" | npx --yes wrangler@3 secret put TM_API_KEY
+            printf '%s' "$TM_API_KEY" | npx --yes wrangler@4 secret put TM_API_KEY
           else
             echo "No TM_API_KEY secret yet; Ticketmaster stays off."
           fi
