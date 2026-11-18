@@ -1,18 +1,17 @@
 // Venues found automatically near any location.
 //
-// 1. Ask OpenStreetMap (Overpass API) for music venues, live-music bars, theatres and clubs nearby that list a website.
+// 1. Look up music venues, live-music bars, theatres and clubs nearby that list a website (venue map built weekly
+//    from OpenStreetMap, see tools/build_venue_map.py).
 // 2. For each website: recognize the ticketing layout (Live Nation, TicketWeb, SeeTickets, schema.org event data, …);
 //    if the home page has no shows, follow its "Events" / "Calendar" link.
-// 3. Remember which page worked for each site (3 days) and which venues are in each area (7 days).
+// 3. Remember which page worked for each site (3 days).
 
 import { PARSERS, stripTags, localToIso, extractSaleTimes } from "./index.js";
 
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
-const AREA_TTL = 7 * 86400 * 1000, SITE_TTL = 3 * 86400 * 1000, FAIL_TTL = 2 * 86400 * 1000;
+const SITE_TTL = 3 * 86400 * 1000, FAIL_TTL = 2 * 86400 * 1000;
 export const MAX_DISCOVERED = 20;
 const MAX_AREA_MILES = 25;
 
-const SCORE = { music_venue: 5, concert_hall: 5, nightclub: 3, events_venue: 2, theatre: 2, arts_centre: 1 };
 const SKIP_NAME = /\b(cinema|movie|multiplex|imax|school|elementary|middle school|high school|college|university|church|library|museum|community cent(er|re)|senior)\b/i;
 const SKIP_HOST = /(facebook|instagram|twitter|x\.com|linktr\.ee|yelp|google|tripadvisor|eventbrite|ticketmaster|wikipedia|tiktok|youtube)\./i;
 
@@ -44,43 +43,26 @@ function cleanWebsite(w) {
   try { const u = new URL(w); if (!/^https?:$/.test(u.protocol) || SKIP_HOST.test(u.hostname + ".")) return null; u.hash = ""; return u.href; } catch { return null; }
 }
 
-// ------------------------------------------------------------------ OpenStreetMap
+// ------------------------------------------------------------------ the venue map
+// venues/<lat>_<lon>.json on the site (1-degree squares), built weekly from OpenStreetMap by a GitHub Action.
+const MAP_BASE = "https://calvin339.github.io/ticket-finder/venues/";
 export async function venuesNear(loc, radius, env, fetchJson) {
   const r = Math.min(radius, MAX_AREA_MILES);
-  const areaKey = `disc:${loc.lat.toFixed(2)},${loc.lon.toFixed(2)},${Math.round(r)}`;
-  const cached = env.SUBS ? await env.SUBS.get(areaKey, "json").catch(() => null) : null;
-  if (cached && Date.now() - cached.at < AREA_TTL) return cached.venues;
-  // A map rectangle around the spot (much faster for the map servers than a radius search).
   const dLat = r / 69, dLon = r / (69 * Math.max(0.2, Math.cos((loc.lat * Math.PI) / 180)));
-  const bbox = [loc.lat - dLat, loc.lon - dLon, loc.lat + dLat, loc.lon + dLon].map((x) => x.toFixed(4)).join(",");
-  const parts = ["music_venue", "concert_hall", "nightclub", "theatre", "arts_centre", "events_venue"].map((a) => `nwr["amenity"="${a}"](${bbox});`).join("") + `nwr["live_music"="yes"](${bbox});`;
-  const q = `[out:json][timeout:15];(${parts});out center tags 800;`;
-  let data = null;
-  const errs = [];
-  for (const ep of OVERPASS) {
-    try { data = await fetchJson(ep, "data=" + encodeURIComponent(q)); if (data && data.elements) break; }
-    catch (e) { if (e && e.budget) throw e; errs.push(`${new URL(ep).hostname.split(".").slice(-2, -1)[0]} ${String(e.message || e).replace(/^map lookup /, "").slice(0, 30)}`); }
-  }
-  if (!data || !data.elements) throw new Error(`map servers busy (${errs.join("; ")})`);
-  const seen = new Set();
+  const cells = [];
+  for (let a = Math.floor(loc.lat - dLat); a <= Math.floor(loc.lat + dLat); a++)
+    for (let o = Math.floor(loc.lon - dLon); o <= Math.floor(loc.lon + dLon); o++) cells.push(`${a}_${o}`);
+  const lists = await Promise.all(cells.slice(0, 6).map((c) => fetchJson(`${MAP_BASE}${c}.json`).catch((e) => { if (e && e.budget) throw e; return []; })));
   const venues = [];
-  for (const el of data.elements) {
-    const t = el.tags || {};
-    const lat = el.lat ?? el.center?.lat, lon = el.lon ?? el.center?.lon;
-    const website = cleanWebsite(t.website || t["contact:website"] || t.url);
-    if (!t.name || !website || lat == null || SKIP_NAME.test(t.name)) continue;
-    const host = hostOf(website);
-    if (seen.has(host)) continue;
-    seen.add(host);
-    const score = (SCORE[t.amenity] || 0) + (t.live_music === "yes" ? 4 : 0);
-    if (!score) continue;
-    const city = [t["addr:city"], t["addr:state"]].filter(Boolean).join(", ");
-    venues.push({ name: t.name, lat, lon, website, host, city, score });
+  for (const v of lists.flat()) {
+    if (!v || !v.w || SKIP_NAME.test(v.n || "")) continue;
+    const site = cleanWebsite(v.w);
+    if (!site) continue;
+    const venue = { name: v.n, lat: v.la, lon: v.lo, website: site, host: hostOf(site), city: v.c || "", score: v.s || 1 };
+    if (milesBetween(loc, venue) <= r) venues.push(venue);
   }
   venues.sort((a, b) => b.score - a.score || milesBetween(loc, a) - milesBetween(loc, b));
-  const top = venues.slice(0, 60);
-  if (env.SUBS) await env.SUBS.put(areaKey, JSON.stringify({ at: Date.now(), venues: top })).catch(() => {});
-  return top;
+  return venues;
 }
 
 // ------------------------------------------------------------------ recognizing a site's layout

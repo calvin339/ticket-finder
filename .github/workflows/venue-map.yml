@@ -1,0 +1,25 @@
+name: Build venue map
+
+# Weekly: gather music venues with websites from OpenStreetMap into venues/*.json for the search worker.
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/build_venue_map.py venues
+      - name: Save
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A venues
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -qm "Update venue map" && git pull --rebase -q origin main && git push

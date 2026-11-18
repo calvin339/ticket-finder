@@ -33,7 +33,6 @@ export default {
       if (url.pathname === "/search") return json(await search(url, env, ctx), cors);
       if (url.pathname === "/artists") return json(await artistSuggest(url.searchParams.get("q") || ""), cors, 3600);
       if (url.pathname === "/venues") return json({ venues: VENUES.map(({ name, city, lat, lon, kind }) => ({ name, city, lat, lon, kind })) }, cors, 3600);
-      if (url.pathname === "/debug-map") return json(await debugMap(), cors);
       if (["/subscribe", "/confirm", "/subscription", "/unsubscribe"].includes(url.pathname)) {
         const r = await handleAlertsRequest(url, request, env, ctx, { runSearch });
         return r instanceof Response ? r : json(r, cors);
@@ -511,10 +510,11 @@ export async function runSearch(q, env, ctx) {
   const auto = (async () => {
     let near;
     try {
-      near = await venuesNear(loc, radius, env, async (ep, body) => {
+      near = await venuesNear(loc, radius, env, async (ep) => {
         spend(budget);
-        const r = await fetch(ep, { method: "POST", body, headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" }, signal: AbortSignal.timeout(18000) });
-        if (!r.ok) throw new Error(`map lookup ${r.status}`);
+        const r = await fetch(ep, { headers: { "User-Agent": UA }, cf: { cacheTtl: 21600, cacheEverything: true }, signal: AbortSignal.timeout(8000) });
+        if (r.status === 404) return [];
+        if (!r.ok) throw new Error(`venue map ${r.status}`);
         return r.json();
       });
     } catch (e) { sources["Venue finder"] = `error: ${String(e.message || e).slice(0, 80)}`; return; }
@@ -564,31 +564,3 @@ async function artistSuggest(q) {
   return { artists: (d.data || []).map((a) => ({ name: a.name, img: a.picture_medium || null, fans: a.nb_fan ?? null })) };
 }
 
-// Temporary: which map sources answer from Cloudflare?
-async function debugMap() {
-  const out = {};
-  const vb = "-97.90,30.42,-97.58,30.12"; // Austin box
-  const tests = {
-    nomi_amenity: `https://nominatim.openstreetmap.org/search?amenity=music_venue&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
-    nomi_q_bracket: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent("[music_venue]")}&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
-    nomi_q_nightclub: `https://nominatim.openstreetmap.org/search?q=nightclub&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
-    nomi_q_music_venue: `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent("music venue")}&viewbox=${vb}&bounded=1&format=jsonv2&extratags=1&limit=50`,
-  };
-  for (const [k, u] of Object.entries(tests)) {
-    const t = Date.now();
-    try {
-      const r = await fetch(u, { headers: { "User-Agent": UA, Referer: "https://calvin339.github.io/ticket-finder/" }, signal: AbortSignal.timeout(12000) });
-      const txt = await r.text(); let d = null; try { d = JSON.parse(txt); } catch {}
-      out[k] = d ? `${r.status} ${Date.now() - t}ms ${d.length} results, ${d.filter((x) => x.extratags && (x.extratags.website || x.extratags["contact:website"])).length} with website: ` + d.slice(0, 10).map((x) => `${x.name} [${x.type}]`).join(", ") : `${r.status} ${txt.slice(0, 80)}`;
-    } catch (e) { out[k] = "error " + String(e.message || e).slice(0, 60); }
-    await new Promise((r) => setTimeout(r, 1100));
-  }
-  const sparql = `SELECT DISTINCT ?v ?vLabel ?site WHERE { SERVICE wikibase:around { ?v wdt:P625 ?loc. bd:serviceParam wikibase:center "Point(-97.7431 30.2672)"^^geo:wktLiteral; wikibase:radius "40". } ?v wdt:P856 ?site; wdt:P31 ?c. ?c wdt:P279* ?cls. VALUES ?cls { wd:Q8719053 wd:Q1060829 wd:Q622425 wd:Q24354 wd:Q11315 wd:Q18674739 wd:Q41253 } SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } } LIMIT 300`;
-  const t = Date.now();
-  try {
-    const r = await fetch("https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(sparql), { headers: { "User-Agent": UA, Accept: "application/sparql-results+json" }, signal: AbortSignal.timeout(20000) });
-    const d = await r.json();
-    out.wikidata_broad = `${r.status} in ${Date.now() - t}ms, ${d.results.bindings.length}: ` + d.results.bindings.slice(0, 40).map((b) => b.vLabel.value).join(", ");
-  } catch (e) { out.wikidata_broad = `error after ${Date.now() - t}ms: ${String(e.message || e).slice(0, 60)}`; }
-  return out;
-}
