@@ -161,8 +161,12 @@ export function parseTicketWeb(html, venue, now = new Date()) {
     let mo, d;
     const date = /class="tw-event-date">\s*([\d]{1,2})\.(\d{1,2})/.exec(b);
     const gridDate = /class="tw-image-date">\s*([A-Za-z]{3})[a-z]*\.?\s*(?:<[^>]+>)?\s*(\d{1,2})/.exec(b);
+    // Other plugin themes: "Tue, Nov 17" in tw-event-date, or month + day in separate spans.
+    const wordDate = /class="tw-event-date">\s*(?:[A-Za-z]{3}\w*,?\s+)?([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})\b/.exec(b);
+    const splitDate = /class="tw-event-month">\s*([A-Za-z]{3})[a-z]*\s*<\/span>\s*<span class="tw-event-date">\s*(\d{1,2})\s*</.exec(b);
+    const named = [gridDate, wordDate, splitDate].find((x) => x && MONTHS[x[1].toLowerCase()]);
     if (date) { mo = +date[1]; d = +date[2]; }
-    else if (gridDate && MONTHS[gridDate[1].toLowerCase()]) { mo = MONTHS[gridDate[1].toLowerCase()]; d = +gridDate[2]; }
+    else if (named) { mo = MONTHS[named[1].toLowerCase()]; d = +named[2]; }
     else continue;
     const y = inferYear(mo, d, now);
     const att = /class="tw-attractions">([\s\S]*?)<\/div>/.exec(b);
@@ -243,7 +247,136 @@ export function parseAnotherPlanet(html, venue, now = new Date()) {
   return [...out.values()];
 }
 
-export const PARSERS = { livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet };
+// Pull presale / on-sale times out of a show page's text, e.g.
+//   "Artist presale Wed Nov 18 · 10 AM   On sale Fri Nov 20 · 10 AM"
+//   "Tickets will go on sale 11/18/2026 10:00:00 AM PST"
+export function extractSaleTimes(text, now = new Date()) {
+  const presales = [];
+  let general = null;
+  const t = String(text || "").replace(/\s+/g, " ");
+  // Numeric form (SeeTickets): "go on sale 11/18/2026 10:00:00 AM"
+  const num = /on sale (\d{1,2})\/(\d{1,2})\/(\d{4}) (\d{1,2}):(\d{2})(?::\d{2})? ?([AP]M)/i.exec(t);
+  if (num) {
+    let h = +num[4] % 12; if (/p/i.test(num[6])) h += 12;
+    general = { start: localToIso(+num[3], +num[1], +num[2], h, +num[5]), dateOnly: false };
+  }
+  // Word form: "[label] presale|on sale [Dow,] Mon DD[, YYYY] [·|at|@|,] [10 AM]"
+  const re = /((?:[A-Za-z][\w&.'’-]*\s){0,3})?\b(pre-?sale|on sale)\s*:?\s*(?:begins\s*)?(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?(?:\s*(?:·|at|@|,|-)?\s*(\d{1,2}(?::\d{2})?\s*[ap]\.?\s?m\.?))?/gi;
+  let m;
+  while ((m = re.exec(t))) {
+    const mo = MONTHS[m[3].toLowerCase()], d = +m[4];
+    const y = m[5] ? +m[5] : inferYear(mo, d, now);
+    const clock = parseClock(m[6]);
+    const start = localToIso(y, mo, d, clock ? clock.h : 10, clock ? clock.mi : 0);
+    if (/pre/i.test(m[2])) {
+      const kind = /(artist|fan club|fan|venue|spotify|local|amex|american express|citi|vip|member|ticketmaster|live nation|official platinum)\s*$/i.exec((m[1] || "").trim());
+      const label = kind ? kind[1].replace(/^\w/, (c) => c.toUpperCase()) + " presale" : "Presale";
+      if (!presales.some((p) => p.start === start)) presales.push({ name: label, start, end: null, code: null, dateOnly: !clock });
+    } else if (!general || (general.dateOnly && clock)) general = { start, dateOnly: !clock };
+  }
+  return { presales, general };
+}
+
+// SeeTickets' WordPress plugin (The Chapel, Great American Music Hall, Hotel Utah).
+export function parseSeeTickets(html, venue, now = new Date()) {
+  const body = html.slice(Math.max(0, html.indexOf("<body")));
+  const out = new Map();
+  for (const b of body.split(/seetickets-list-event-container mdc-card/).slice(1)) {
+    const link = /<p class="[^"]*\btitle\b[^"]*">\s*<a href="(https:\/\/wl\.seetickets\.us\/event\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(b);
+    const date = /<p class="[^"]*\bdate\b[^"]*">\s*(?:[A-Za-z]{3}\w*,?\s+)?([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?/.exec(b);
+    if (!link || !date || !MONTHS[date[1].toLowerCase()]) continue;
+    const url = decodeEntities(link[1]);
+    if (out.has(url)) continue;
+    const mo = MONTHS[date[1].toLowerCase()], d = +date[2], y = date[3] ? +date[3] : inferYear(mo, d, now);
+    const show = /class="see-showtime[^"]*">\s*([^<]+)</.exec(b);
+    const clock = parseClock(show && show[1]);
+    const head = /class="[^"]*\bheadliners\b[^"]*">([\s\S]*?)<\/p>/.exec(b);
+    const sup = /class="[^"]*\bsupporting-talent\b[^"]*">([\s\S]*?)<\/p>/.exec(b);
+    const title = stripTags(link[2]);
+    const names = [title, ...[head, sup].filter(Boolean).flatMap((x) => stripTags(x[1]).split(/,|&|\band\b|\bw\/|\bwith\b/i)).map((s) => s.replace(/^\s*(supporting talent|headliners?|with)\s*:\s*/i, "").trim()).filter(Boolean)].filter((n, i, a) => a.findIndex((x) => x.toLowerCase() === n.toLowerCase()) === i);
+    out.set(url, {
+      title, names, showDate: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+      showTime: clock ? `${String(clock.h).padStart(2, "0")}:${String(clock.mi).padStart(2, "0")}` : null,
+      presales: [], generalOnsale: null, generalOnsaleDateOnly: false,
+      ticketUrl: url, sourceUrl: url, status: "", detailUrl: url,
+    });
+  }
+  return [...out.values()];
+}
+// A SeeTickets event page: structured data for the exact date, plus "Tickets will go on sale …".
+export function parseSeeTicketsDetail(html, show, now = new Date()) {
+  const text = stripTags(html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " "));
+  const sale = extractSaleTimes(text, now);
+  const ld = /"startDate"\s*:\s*"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(html);
+  const performers = [...html.matchAll(/"@type"\s*:\s*"MusicGroup",\s*"name"\s*:\s*"([^"]+)"/g)].map((m) => decodeEntities(m[1]));
+  return {
+    showDate: ld ? `${ld[1]}-${ld[2]}-${ld[3]}` : show.showDate, showTime: ld ? `${ld[4]}:${ld[5]}` : show.showTime,
+    presales: sale.presales.length ? sale.presales : show.presales,
+    generalOnsale: sale.general ? sale.general.start : show.generalOnsale, generalOnsaleDateOnly: sale.general ? sale.general.dateOnly : show.generalOnsaleDateOnly,
+    status: /not on sale yet/i.test(text) ? "upcoming" : /sold out/i.test(text) ? "soldout" : "onsale",
+    names: [...show.names, ...performers],
+  };
+}
+
+// Café du Nord / Swedish American Hall list ("bill" rows); show pages list presale and on-sale times.
+export function parseBillJa(html, venue) {
+  const out = [];
+  const origin = new URL(venue.url).origin;
+  for (const row of html.split(/<li class="bill-ja__row"/).slice(1)) {
+    const href = /class="bill-ja__link" href="([^"]+)"/.exec(row);
+    const time = /<time class="bill-ja__date" datetime="(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(row);
+    const name = /class="bill-ja__name">([\s\S]*?)(?:<svg|<\/span>\s*(?:<span class="bill-ja__status"|<\/a>))/.exec(row);
+    if (!href || !time || !name) continue;
+    const status = /class="bill-ja__status">([^<]*)</.exec(row);
+    const upstairs = /Swedish American Hall/i.test(row);
+    const url = new URL(decodeEntities(href[1]), origin).href;
+    out.push({
+      title: stripTags(name[1]), names: [stripTags(name[1])],
+      venueOverride: upstairs ? "Swedish American Hall" : null,
+      showDate: `${time[1]}-${time[2]}-${time[3]}`, showTime: `${time[4]}:${time[5]}`,
+      presales: [], generalOnsale: null, generalOnsaleDateOnly: false,
+      ticketUrl: url, sourceUrl: url, status: status ? stripTags(status[1]).toLowerCase() : "", detailUrl: url,
+    });
+  }
+  return out;
+}
+export function parseBillJaDetail(html, show, now = new Date()) {
+  const text = stripTags(html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " "));
+  const sale = extractSaleTimes(text, now);
+  const tix = /href="(https:\/\/www\.ticketweb\.com\/event\/[^"]+)"/.exec(html);
+  return {
+    presales: sale.presales.length ? sale.presales : show.presales,
+    generalOnsale: sale.general ? sale.general.start : show.generalOnsale, generalOnsaleDateOnly: sale.general ? sale.general.dateOnly : show.generalOnsaleDateOnly,
+    ticketUrl: tix ? decodeEntities(tix[1]) : show.ticketUrl,
+  };
+}
+
+// Bottom of the Hill's hand-made calendar table. (Hidden HTML comments are ignored.)
+export function parseBottomOfTheHill(html, venue) {
+  const clean = html.replace(/<!--[\s\S]*?-->/g, " ");
+  const out = [];
+  const parts = clean.split(/name="(\d{8})"/);
+  for (let i = 1; i < parts.length; i += 2) {
+    const ymd = parts[i], chunk = parts[i + 1] || "";
+    const bands = [...chunk.matchAll(/class="band"[^>]*>([\s\S]*?)<\/big>/g)].map((m) => stripTags(m[1])).filter((b) => b && !/^x+$/i.test(b));
+    if (!bands.length) continue;
+    const tix = new RegExp(`href="(https?:\\/\\/www\\.bottomofthehill\\.com\\/(?:dice|stubmatic)\\/event${ymd}[^"]*)"`).exec(parts[i - 1].slice(-3000) + chunk);
+    const showDate = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`;
+    if (out.some((s) => s.showDate === showDate)) continue;
+    out.push({
+      title: bands.join(", "), names: bands, showDate, showTime: null,
+      presales: [], generalOnsale: null, generalOnsaleDateOnly: false,
+      ticketUrl: tix ? tix[1].replace(/^http:/, "https:") : `https://www.bottomofthehill.com/${ymd}.html`, sourceUrl: `https://www.bottomofthehill.com/${ymd}.html`,
+      status: tix ? "onsale" : "",
+    });
+  }
+  return out;
+}
+
+export const PARSERS = { livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill };
+// For site types whose list pages lack on-sale times: read a matching show's own page.
+export const DETAIL_PARSERS = { seetickets: parseSeeTicketsDetail, billja: parseBillJaDetail };
+const MAX_DETAIL_PAGES = 12;
 
 // ---------------------------------------------------------------- Ticketmaster
 async function ticketmaster(env, artists, loc, radius) {
@@ -285,6 +418,7 @@ async function search(url, env, ctx) {
   const sources = {};
   const found = [];
   const now = new Date();
+  const detailBudget = { n: MAX_DETAIL_PAGES };
 
   await Promise.all(venues.map(async (v) => {
     try {
@@ -296,7 +430,14 @@ async function search(url, env, ctx) {
       }
       sources[v.name] = `${shows.length} shows`;
       for (const s of shows) for (const a of artists) {
-        if (matchesArtist(a, ...s.names)) found.push({ artist: a, source: v.name, venue: v.name, city: v.city, ...s });
+        if (!matchesArtist(a, ...s.names)) continue;
+        let show = s;
+        const detail = DETAIL_PARSERS[v.kind];
+        if (detail && s.detailUrl && detailBudget.n-- > 0) {
+          try { const d = await fetchPage(s.detailUrl, ctx); if (d.status < 400) show = { ...s, ...detail(d.html, s, now) }; } catch {}
+        }
+        const { venueOverride, detailUrl, ...rest } = show;
+        found.push({ artist: a, source: v.name, venue: venueOverride || v.name, city: v.city, ...rest });
       }
     } catch (e) { sources[v.name] = `error: ${String(e.message || e).slice(0, 80)}`; }
   }));
