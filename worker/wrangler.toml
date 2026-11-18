@@ -2,3 +2,12 @@ name = "ticket-finder"
 main = "src/index.js"
 compatibility_date = "2026-11-01"
 workers_dev = true
+
+# Email alerts: check every 15 minutes.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Sign-ups for email alerts. The deploy workflow creates this store and fills in its id.
+[[kv_namespaces]]
+binding = "SUBS"
+id = "__SUBS_ID__"

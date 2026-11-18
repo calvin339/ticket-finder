@@ -5,10 +5,13 @@
 //   and returns upcoming shows for those artists with presale / on-sale times.
 // GET /artists?q=name   Artist suggestions with photos (Deezer's public catalog).
 // GET /venues           The venues this worker reads.
+// POST /subscribe, GET /confirm, /subscription, /unsubscribe   Email alerts (see alerts.js).
+// Every 15 minutes the schedule sends email alerts.
 //
 // Venue pages are cached for 20 minutes so repeated searches stay fast and polite.
 
 import { VENUES } from "./venues.js";
+import { handleAlertsRequest, runAlerts } from "./alerts.js";
 
 const ALLOWED_ORIGINS = ["https://calvin339.github.io"];
 const PAGE_TTL = 20 * 60; // seconds
@@ -20,7 +23,8 @@ export default {
     const origin = request.headers.get("Origin") || "";
     const cors = {
       "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) || origin.startsWith("http://127.0.0.1") || origin.startsWith("http://localhost") ? origin : ALLOWED_ORIGINS[0],
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
       "Vary": "Origin",
     };
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -28,10 +32,17 @@ export default {
       if (url.pathname === "/search") return json(await search(url, env, ctx), cors);
       if (url.pathname === "/artists") return json(await artistSuggest(url.searchParams.get("q") || ""), cors, 3600);
       if (url.pathname === "/venues") return json({ venues: VENUES.map(({ name, city, lat, lon, kind }) => ({ name, city, lat, lon, kind })) }, cors, 3600);
-      return json({ ok: true, endpoints: ["/search", "/artists", "/venues"] }, cors);
+      if (["/subscribe", "/confirm", "/subscription", "/unsubscribe"].includes(url.pathname)) {
+        const r = await handleAlertsRequest(url, request, env, ctx, { runSearch });
+        return r instanceof Response ? r : json(r, cors);
+      }
+      return json({ ok: true, endpoints: ["/search", "/artists", "/venues", "/subscribe"] }, cors);
     } catch (e) {
       return json({ error: String(e && e.message || e) }, cors, 0, 500);
     }
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runAlerts(env, ctx, { runSearch }, env.WORKER_URL || "https://ticket-finder.calvin339.workers.dev"));
   },
 };
 
@@ -373,7 +384,33 @@ export function parseBottomOfTheHill(html, venue) {
   return out;
 }
 
-export const PARSERS = { livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill };
+
+// The UC Theatre (Berkeley), a Webflow site: month + day tiles, headliner, support, show time.
+export function parseUCTheatre(html, venue, now = new Date()) {
+  const out = [];
+  const origin = new URL(venue.url).origin;
+  for (const b of html.split(/class="shows-collection-item w-dyn-item"/).slice(1)) {
+    const mo = /class="heading-2">\s*([A-Za-z]{3})/.exec(b), day = /class="heading-3">\s*(\d{1,2})\s*</.exec(b);
+    const href = /href="(\/shows\/[^"]+)"/.exec(b), name = /class="heading-9 name-listing">([\s\S]*?)<\/h1>/.exec(b);
+    if (!mo || !day || !href || !name || !MONTHS[mo[1].toLowerCase()]) continue;
+    const m = MONTHS[mo[1].toLowerCase()], d = +day[1], y = inferYear(m, d, now);
+    const sup = /class="support-listing">([\s\S]*?)<\/h1>/.exec(b);
+    const show = /class="text-block-84">\s*([^<]+)</.exec(b);
+    const clock = parseClock(show && show[1]);
+    const title = stripTags(name[1]);
+    const url = origin + decodeEntities(href[1]);
+    const soldOut = /class="image-64"/.test(b);
+    out.push({
+      title, names: [title, ...(sup ? stripTags(sup[1]).split(/,|&|\band\b/i).map((x) => x.trim()).filter(Boolean) : [])],
+      showDate: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+      showTime: clock ? `${String(clock.h).padStart(2, "0")}:${String(clock.mi).padStart(2, "0")}` : null,
+      presales: [], generalOnsale: null, generalOnsaleDateOnly: false,
+      ticketUrl: url, sourceUrl: url, status: soldOut ? "soldout" : /BUY TICKETS|\$\d/.test(b) ? "onsale" : "",
+    });
+  }
+  return out;
+}
+export const PARSERS = { livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill, uctheatre: parseUCTheatre };
 // For site types whose list pages lack on-sale times: read a matching show's own page.
 export const DETAIL_PARSERS = { seetickets: parseSeeTicketsDetail, billja: parseBillJaDetail };
 const MAX_DETAIL_PAGES = 12;
@@ -408,10 +445,16 @@ async function ticketmaster(env, artists, loc, radius) {
 }
 
 // ---------------------------------------------------------------- search
-async function search(url, env, ctx) {
-  const artists = (url.searchParams.get("artists") || "").split("|").map((s) => s.trim()).filter(Boolean).slice(0, 40);
-  const lat = +url.searchParams.get("lat"), lon = +url.searchParams.get("lon");
-  const radius = Math.min(250, Math.max(5, +url.searchParams.get("radius") || 50));
+function search(url, env, ctx) {
+  return runSearch({
+    artists: (url.searchParams.get("artists") || "").split("|"),
+    lat: url.searchParams.get("lat"), lon: url.searchParams.get("lon"), radius: url.searchParams.get("radius"),
+  }, env, ctx);
+}
+export async function runSearch(q, env, ctx) {
+  const artists = (q.artists || []).map((s) => String(s).trim()).filter(Boolean).slice(0, 40);
+  const lat = q.lat === null || q.lat === "" ? NaN : +q.lat, lon = q.lon === null || q.lon === "" ? NaN : +q.lon;
+  const radius = Math.min(250, Math.max(5, +q.radius || 50));
   if (!artists.length || !isFinite(lat) || !isFinite(lon)) return { error: "Need artists, lat and lon." };
   const loc = { lat, lon };
   const venues = VENUES.filter((v) => milesBetween(loc, v) <= radius);

@@ -1,7 +1,8 @@
 name: Deploy search worker
 
 # Deploys worker/ to Cloudflare Workers when it changes, and records its address in worker.json for the site.
-# Needs repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID. Optional: TM_API_KEY (Ticketmaster).
+# Needs repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+# Optional: TM_API_KEY (Ticketmaster), BREVO_API_KEY + ALERT_FROM_EMAIL (email alerts).
 on:
   push:
     branches: [main]
@@ -31,6 +32,21 @@ jobs:
           done
           echo "::error::Couldn't register a workers.dev subdomain"; exit 1
 
+      - name: Make sure the email-alert storage exists
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/storage/kv/namespaces"
+          id=$(curl -s -H "Authorization: Bearer $TOKEN" "$api?per_page=100" | python3 -c "import sys,json; d=json.load(sys.stdin); print(next((n['id'] for n in d.get('result') or [] if n['title']=='ticket-finder-subs'),''))")
+          if [ -z "$id" ]; then
+            res=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data '{"title":"ticket-finder-subs"}' "$api")
+            id=$(echo "$res" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('result') or {}).get('id') or '')")
+            if [ -z "$id" ]; then echo "::error::Couldn't create the storage. Does the Cloudflare token include 'Workers KV Storage: Edit'? $res"; exit 1; fi
+            echo "Created storage $id"
+          else echo "Storage exists: $id"; fi
+          sed -i "s/__SUBS_ID__/$id/" worker/wrangler.toml
+
       - name: Deploy
         id: deploy
         uses: cloudflare/wrangler-action@v3
@@ -40,18 +56,19 @@ jobs:
           workingDirectory: worker
           command: deploy
 
-      - name: Set the Ticketmaster key (if provided)
+      - name: Set keys (Ticketmaster, email) if provided
         env:
           TM_API_KEY: ${{ secrets.TM_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          ALERT_FROM_EMAIL: ${{ secrets.ALERT_FROM_EMAIL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         working-directory: worker
         run: |
-          if [ -n "$TM_API_KEY" ]; then
-            printf '%s' "$TM_API_KEY" | npx --yes wrangler@4 secret put TM_API_KEY
-          else
-            echo "No TM_API_KEY secret yet; Ticketmaster stays off."
-          fi
+          for name in TM_API_KEY BREVO_API_KEY ALERT_FROM_EMAIL; do
+            if [ -n "${!name}" ]; then printf '%s' "${!name}" | npx --yes wrangler@4 secret put "$name"
+            else echo "No $name secret yet."; fi
+          done
 
       - name: Save the worker's address for the site
         env:

@@ -114,6 +114,9 @@
   .banner { background: var(--panel-2); border: 1px dashed var(--line); border-radius: 12px; padding: 12px 14px; color: var(--muted); font-size: 14px; margin-bottom: 14px; }
   .banner b { color: var(--text); }
   .banner .row { margin-top: 10px; }
+  .checks { display: grid; gap: 6px; margin-top: 10px; }
+  .checks label { display: flex; gap: 8px; align-items: center; margin: 0; font-size: 14px; color: var(--text); }
+  .checks input { width: auto; margin: 0; accent-color: var(--accent); }
   .progress { height: 3px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
   .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
   footer { margin-top: 26px; font-size: 12px; color: var(--muted); text-align: center; }
@@ -171,6 +174,24 @@
         <details id="elsewhereBox" style="margin-top:14px" hidden><summary>Search other sites (AXS, DICE, venues…)</summary><div class="chips" id="elsewhere"></div></details>
       </section>
 
+      <section class="card" id="alertsCard">
+        <h2>Email alerts</h2>
+        <div id="alertsOff">
+          <form id="alertForm" class="row">
+            <input id="alertEmail" type="email" placeholder="you@example.com" autocomplete="email" enterkeyhint="go">
+            <button type="submit">Turn on</button>
+          </form>
+        </div>
+        <div id="alertsOn" hidden><div class="hint ok" id="alertsWho"></div></div>
+        <div class="checks">
+          <label><input type="checkbox" id="alNew" checked> When an artist announces a show near me</label>
+          <label><input type="checkbox" id="alDay" checked> The day before tickets go on sale</label>
+          <label><input type="checkbox" id="alHour" checked> 1 hour before tickets go on sale</label>
+        </div>
+        <div class="hint" id="alertStatus">We'll check your artists every few hours and email you. Uses your artists and location above.</div>
+        <div class="hint" id="alertsOffBtn" hidden><button class="link" id="alertStop" type="button">Turn off email alerts</button></div>
+      </section>
+
     </aside>
 
     <main class="card">
@@ -185,8 +206,8 @@
   </div>
 
   <footer>
-    Shows and on-sale times come from Bay Area venue websites (<span id="venueList">15 venues: the Fillmore, SF Masonic, Bill Graham Civic, the Independent, Great American Music Hall, August Hall, Bimbo's 365, the Chapel, Brick &amp; Mortar, Café du Nord / Swedish American Hall, Neck of the Woods, Hotel Utah, Bottom of the Hill, the Fox Theater and the Greek Theatre</span>)<span id="tmNote"></span>. Shows sold only through AXS, DICE, Eventbrite or other venues may be missing, so use "Search other sites" for those.<br>
-    Your location and artists are stored only in this browser.
+    Shows and on-sale times come from Bay Area venue websites (<span id="venueList">16 venues: the Fillmore, SF Masonic, Bill Graham Civic, the Independent, Great American Music Hall, August Hall, Bimbo's 365, the Chapel, Brick &amp; Mortar, Café du Nord / Swedish American Hall, Neck of the Woods, Hotel Utah, Bottom of the Hill, the Fox Theater, the Greek Theatre and the UC Theatre</span>)<span id="tmNote"></span>. Shows sold only through AXS, DICE, Eventbrite or other venues may be missing, so use "Search other sites" for those.<br>
+    Your location and artists are stored only in this browser, unless you turn on email alerts (then the alert service keeps your email, artists and location until you turn alerts off).
     <details style="margin-top:8px"><summary>Settings</summary>
       <div style="margin-top:8px"><button class="link" id="resetAll" type="button">Clear all my data</button></div>
     </details>
@@ -214,7 +235,7 @@
     } catch { return blank(); }
   }
   let S = load();
-  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch {} }
+  let save = function () { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch {} };
 
   // ---------- Helpers ----------
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -691,7 +712,8 @@
   $("resetAll").addEventListener("click", () => {
     const b = $("resetAll");
     if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Tap again to clear everything"; setTimeout(() => { b.dataset.confirm = ""; b.textContent = "Clear all my data"; }, 4000); return; }
-    S = blank(); save(); b.dataset.confirm = ""; b.textContent = "Clear all my data"; renderAll(); toast("Cleared.");
+    if (S.alert) alertCall("/subscription", { id: S.alert.id, key: S.alert.key, delete: true }).catch(() => {});
+    S = blank(); save(); renderAlerts(); b.dataset.confirm = ""; b.textContent = "Clear all my data"; renderAll(); toast("Cleared.");
   });
 
   // ---------- Tabs, calendar ----------
@@ -734,10 +756,85 @@
     $("impNo").onclick = () => { $("importBanner").innerHTML = ""; };
   }
 
+  // ---------- Email alerts ----------
+  // Sign-up lives in the worker; this browser keeps the sign-up id + key (from the confirmation link).
+  const alertPrefs = () => ({ newShow: $("alNew").checked, dayBefore: $("alDay").checked, hourBefore: $("alHour").checked });
+  const alertBody = () => ({ artists: S.artists.map((a) => a.name), lat: S.location?.lat, lon: S.location?.lon, radius: S.radius, place: S.location?.label || "", alerts: alertPrefs() });
+  const alertSig = () => JSON.stringify(alertBody());
+  function renderAlerts() {
+    const on = !!S.alert;
+    $("alertsOff").hidden = on; $("alertsOn").hidden = !on; $("alertsOffBtn").hidden = !on;
+    if (on) $("alertsWho").textContent = `On for ${S.alert.email || "your email"}`;
+    const a = S.alert?.alerts; if (a) { $("alNew").checked = a.newShow; $("alDay").checked = a.dayBefore; $("alHour").checked = a.hourBefore; }
+  }
+  async function alertCall(path, body) {
+    const w = await workerUrl(); if (!w) throw new Error("Search isn't set up.");
+    const r = await fetch(w + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.error) throw new Error(d.error || "Something went wrong. Try again.");
+    return d;
+  }
+  $("alertForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = $("alertEmail").value.trim();
+    const st = $("alertStatus");
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email)) { st.className = "hint err"; st.textContent = "Enter your email address."; return; }
+    if (!S.location) { st.className = "hint err"; st.textContent = "Set where you are first."; return; }
+    if (!S.artists.length) { st.className = "hint err"; st.textContent = "Add at least one artist first."; return; }
+    const btn = e.submitter || $("alertForm").querySelector("button"); btn.disabled = true;
+    try {
+      const d = await alertCall("/subscribe", { email, ...alertBody() });
+      S.alertPendingEmail = email; save();
+      st.className = "hint ok"; st.textContent = d.note || `Check ${email} and tap the link to confirm (look in spam too).`;
+    } catch (err) { st.className = "hint err"; st.textContent = err.message; }
+    finally { btn.disabled = false; }
+  });
+  let alertT, alertLastSig = null;
+  function syncAlerts() {
+    if (!S.alert) return;
+    clearTimeout(alertT);
+    alertT = setTimeout(async () => {
+      const sig = alertSig(); if (sig === alertLastSig) return;
+      if (!S.location || !S.artists.length) return;
+      try {
+        const d = await alertCall("/subscription", { id: S.alert.id, key: S.alert.key, ...alertBody() });
+        if (d.status === "gone") { S.alert = null; save(); renderAlerts(); return; }
+        alertLastSig = sig; S.alert.alerts = d.alerts; save();
+      } catch {}
+    }, 1200);
+  }
+  for (const id of ["alNew", "alDay", "alHour"]) $(id).addEventListener("change", () => { if (S.alert) { S.alert.alerts = alertPrefs(); save(); syncAlerts(); toast("Alert settings saved."); } });
+  $("alertStop").addEventListener("click", async () => {
+    try { await alertCall("/subscription", { id: S.alert.id, key: S.alert.key, delete: true }); } catch {}
+    S.alert = null; save(); renderAlerts(); $("alertStatus").className = "hint"; $("alertStatus").textContent = "Email alerts are off."; toast("Email alerts turned off.");
+  });
+  async function readAlertLink() {
+    const p = new URLSearchParams(location.search).get("alerts");
+    if (p) {
+      const [id, key] = p.split(".");
+      history.replaceState(null, "", location.pathname);
+      if (/^[0-9a-f-]{36}$/.test(id || "") && /^[0-9a-f]{20,64}$/.test(key || "")) {
+        S.alert = { id, key, email: S.alertPendingEmail || "" }; delete S.alertPendingEmail; save();
+        toast("Email alerts are on. Check your inbox for what's coming up.");
+      }
+    }
+    if (!S.alert) return renderAlerts();
+    renderAlerts();
+    try {
+      const d = await alertCall(`/subscription?${new URLSearchParams({ id: S.alert.id, key: S.alert.key })}`);
+      if (d.status === "gone") { S.alert = null; save(); return renderAlerts(); }
+      S.alert.email = d.email; S.alert.alerts = d.alerts; save(); renderAlerts();
+      alertLastSig = null; syncAlerts();
+    } catch {}
+  }
+  const _save = save;
+  save = function () { _save(); if (S.alert) syncAlerts(); };
+
   // ---------- Boot ----------
   $("checkBtn").addEventListener("click", () => check());
   readShared();
   renderAll();
+  readAlertLink();
   const stale = !S.fetchedAt || Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS || S.fetchKey !== fetchKey();
   if (stale) check({ quiet: true });
   setInterval(renderList, 60000);

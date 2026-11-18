@@ -15,6 +15,8 @@ export const VENUES = [
   { name: "Fox Theater", city: "Oakland, CA", lat: 37.8080, lon: -122.2700, kind: "anotherplanet", url: "https://thefoxoakland.com/listing/", extraUrls: ["https://thefoxoakland.com/"] },
   { name: "Greek Theatre", city: "Berkeley, CA", lat: 37.8738, lon: -122.2546, kind: "anotherplanet", url: "https://thegreekberkeley.com/" },
   { name: "Bill Graham Civic Auditorium", city: "San Francisco, CA", lat: 37.7785, lon: -122.4170, kind: "anotherplanet", url: "https://www.billgrahamcivic.com/" },
+  // The UC Theatre (Berkeley): shows and ticket links
+  { name: "The UC Theatre", city: "Berkeley, CA", lat: 37.8716, lon: -122.2685, kind: "uctheatre", url: "https://www.theuctheatre.org/events" },
   // SeeTickets plugin: exact on-sale times from each show's page
   { name: "The Chapel", city: "San Francisco, CA", lat: 37.7604, lon: -122.4213, kind: "seetickets", url: "https://thechapelsf.com/calendar/", extraUrls: ["https://www.thechapelsf.com/music/"] },
   { name: "Great American Music Hall", city: "San Francisco, CA", lat: 37.7849, lon: -122.4189, kind: "seetickets", url: "https://gamh.com/" },
