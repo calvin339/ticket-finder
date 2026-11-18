@@ -33,6 +33,7 @@ export default {
       if (url.pathname === "/search") return json(await search(url, env, ctx), cors);
       if (url.pathname === "/artists") return json(await artistSuggest(url.searchParams.get("q") || ""), cors, 3600);
       if (url.pathname === "/venues") return json({ venues: VENUES.map(({ name, city, lat, lon, kind }) => ({ name, city, lat, lon, kind })) }, cors, 3600);
+      if (url.pathname === "/debug-map") return json(await debugMap(), cors);
       if (["/subscribe", "/confirm", "/subscription", "/unsubscribe"].includes(url.pathname)) {
         const r = await handleAlertsRequest(url, request, env, ctx, { runSearch });
         return r instanceof Response ? r : json(r, cors);
@@ -561,4 +562,28 @@ async function artistSuggest(q) {
   const r = await fetch(`https://api.deezer.com/search/artist?${new URLSearchParams({ q, limit: "8" })}`, { cf: { cacheTtl: 86400, cacheEverything: true } });
   const d = await r.json();
   return { artists: (d.data || []).map((a) => ({ name: a.name, img: a.picture_medium || null, fans: a.nb_fan ?? null })) };
+}
+
+// Temporary: which map sources answer from Cloudflare?
+async function debugMap() {
+  const q = `[out:json][timeout:10];nwr["amenity"="music_venue"](30.20,-97.80,30.33,-97.68);out center tags 50;`;
+  const eps = ["https://overpass-api.de/api/interpreter", "https://lz4.overpass-api.de/api/interpreter", "https://z.overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.osm.ch/api/interpreter"];
+  const out = {};
+  await Promise.all(eps.map(async (ep) => {
+    const t = Date.now();
+    try {
+      const r = await fetch(ep, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(15000) });
+      const txt = await r.text();
+      let n = null; try { n = JSON.parse(txt).elements.length; } catch {}
+      out[ep] = `${r.status} in ${Date.now() - t}ms, ${n === null ? "not json: " + txt.slice(0, 60) : n + " venues"}`;
+    } catch (e) { out[ep] = `error after ${Date.now() - t}ms: ${String(e.message || e).slice(0, 60)}`; }
+  }));
+  const sparql = `SELECT ?v ?vLabel ?site WHERE { SERVICE wikibase:around { ?v wdt:P625 ?loc. bd:serviceParam wikibase:center "Point(-97.7431 30.2672)"^^geo:wktLiteral; wikibase:radius "40". } VALUES ?cls { wd:Q8719053 wd:Q1060829 wd:Q622425 wd:Q24354 wd:Q57660343 } ?v wdt:P31 ?cls; wdt:P856 ?site. SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } } LIMIT 200`;
+  const t = Date.now();
+  try {
+    const r = await fetch("https://query.wikidata.org/sparql?format=json&query=" + encodeURIComponent(sparql), { headers: { "User-Agent": UA, Accept: "application/sparql-results+json" }, signal: AbortSignal.timeout(15000) });
+    const d = await r.json();
+    out.wikidata = `${r.status} in ${Date.now() - t}ms, ${d.results.bindings.length} venues: ` + d.results.bindings.slice(0, 12).map((b) => b.vLabel.value).join(", ");
+  } catch (e) { out.wikidata = `error after ${Date.now() - t}ms: ${String(e.message || e).slice(0, 60)}`; }
+  return out;
 }
