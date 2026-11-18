@@ -132,7 +132,7 @@
     </div>
     <div class="head-actions">
       <button class="ghost" id="shareBtn" type="button">Share my artists</button>
-      <button id="checkBtn" type="button" title="Refresh shows and on-sale times now">Update</button>
+      <button id="checkBtn" type="button" title="Search venue sites and Ticketmaster now">Search</button>
     </div>
   </header>
 
@@ -168,26 +168,9 @@
         </form>
         <div class="hint" id="artistStatus"></div>
         <div class="chips" id="chips"></div>
-        <div class="hint" id="webNote" hidden></div>
         <details id="elsewhereBox" style="margin-top:14px" hidden><summary>Search other sites (AXS, DICE, venues…)</summary><div class="chips" id="elsewhere"></div></details>
       </section>
 
-      <section class="card" id="keyCard" hidden>
-        <h2>Data sources</h2>
-        <div class="hint" style="margin-top:0">Add at least one key. Exact presale and on-sale times come only from Ticketmaster. Each one is saved only in this browser.</div>
-        <form id="keyForm">
-          <label for="keyInput">Ticketmaster Consumer Key <span id="tmKeyState"></span></label>
-          <input id="keyInput" placeholder="From developer.ticketmaster.com" autocomplete="off">
-          <div class="hint" style="margin-top:4px">Gives exact presale and on-sale times. Get one at <a href="https://developer.ticketmaster.com/" target="_blank" rel="noopener" style="color:var(--accent)">developer.ticketmaster.com</a>.</div>
-          <label for="sgKeyInput">SeatGeek Client ID <span id="sgKeyState"></span></label>
-          <input id="sgKeyInput" placeholder="From seatgeek.com/account/develop" autocomplete="off">
-          <div class="hint" style="margin-top:4px">Adds shows Ticketmaster doesn't list (US and Canada). Get one at <a href="https://seatgeek.com/account/develop" target="_blank" rel="noopener" style="color:var(--accent)">seatgeek.com/account/develop</a>.</div>
-          <label for="jbKeyInput">JamBase API key <span id="jbKeyState"></span></label>
-          <input id="jbKeyInput" placeholder="Starts with jbd_" autocomplete="off">
-          <div class="hint" style="margin-top:4px">Adds shows sold on AXS, DICE, Eventbrite, See Tickets and more, and powers "Just announced." It doesn't include on-sale times. Get one at <a href="https://data.jambase.com" target="_blank" rel="noopener" style="color:var(--accent)">data.jambase.com</a>. The free trial lasts 14 days.</div>
-          <div style="margin-top:12px"><button type="submit">Save keys</button></div>
-        </form>
-      </section>
     </aside>
 
     <main class="card">
@@ -202,53 +185,36 @@
   </div>
 
   <footer>
-    Shows come from <span id="srcList">Ticketmaster, SeatGeek and JamBase</span>. Presale and on-sale times come from Ticketmaster and a daily web search. Shows sold only through AXS, DICE, Eventbrite or a venue's box office may be missing, so use "Search other sites" for those.<br>
+    Shows and on-sale times come from Bay Area venue websites (<span id="venueList">the Fillmore, SF Masonic, the Independent, August Hall, Brick &amp; Mortar, the Fox Theater and the Greek Theatre</span>)<span id="tmNote"></span>. Shows sold only through AXS, DICE, Eventbrite or other venues may be missing, so use "Search other sites" for those.<br>
     Your location and artists are stored only in this browser.
     <details style="margin-top:8px"><summary>Settings</summary>
-      <div style="margin-top:8px"><button class="link" id="changeKey" type="button">Change data source keys</button> · <button class="link" id="resetAll" type="button">Clear all my data</button></div>
+      <div style="margin-top:8px"><button class="link" id="resetAll" type="button">Clear all my data</button></div>
     </details>
   </footer>
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
-/* ===== Configuration =====
-   Put your keys here so everyone you share the site with can use it without
-   getting their own. Anything left empty, visitors can paste in themselves.
-   - Ticketmaster Discovery API "Consumer Key": developer.ticketmaster.com
-   - SeatGeek "Client ID": seatgeek.com/account/develop
-   - JamBase Data API key (starts with jbd_): data.jambase.com */
-const DEFAULT_API_KEY = "";
-const DEFAULT_SEATGEEK_CLIENT_ID = "";
-const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G6hNv";
-
 (() => {
-  const TM = "https://app.ticketmaster.com/discovery/v2";
-  const SG = "https://api.seatgeek.com/2";
-  const JB = "https://api.data.jambase.com/v3";
-  const SOURCE_NAMES = { tm: "Ticketmaster", sg: "SeatGeek", jb: "JamBase" };
   const GEO = "https://geocoding-api.open-meteo.com/v1/search";
   const STORE_KEY = "onsale-radar.v1";
   const STALE_MS = 6 * 3600 * 1000;
   const $ = (id) => document.getElementById(id);
 
   // ---------- Storage ----------
-  const blank = () => ({ apiKey: "", sgKey: "", jbKey: "", location: null, radius: 50, artists: [], events: [], fetchedAt: null, fetchKey: "" });
+  const blank = () => ({ location: null, radius: 50, artists: [], events: [], fetchedAt: null, fetchKey: "", sources: null });
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
       if (!s) return blank();
-      if ((s.events || []).some((e) => !Array.isArray(e.links))) { s.events = []; s.fetchedAt = null; } // saved by an older version
-      return Object.assign(blank(), s);
+      if ((s.events || []).some((e) => !e.v2)) { s.events = []; s.fetchedAt = null; } // saved by an older version
+      const out = Object.assign(blank(), s);
+      for (const k of ["apiKey", "sgKey", "jbKey", "requested", "lastWebReq", "webReqBase", "feedAt"]) delete out[k];
+      return out;
     } catch { return blank(); }
   }
   let S = load();
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch {} }
-  const apiKey = () => (DEFAULT_API_KEY || S.apiKey || "").trim();
-  const sgKey = () => (DEFAULT_SEATGEEK_CLIENT_ID || S.sgKey || "").trim();
-  const jbKey = () => (DEFAULT_JAMBASE_KEY || S.jbKey || "").trim();
-  const anyKey = () => !!(apiKey() || sgKey() || jbKey());
-  const activeSources = () => [apiKey() && "tm", jbKey() && "jb", sgKey() && "sg"].filter(Boolean);
 
   // ---------- Helpers ----------
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -278,318 +244,45 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     return `in ${Math.round(h / 24)} days`;
   }
 
-  // ---------- API ----------
-  class ApiError extends Error { constructor(msg, status, source) { super(msg); this.status = status; this.source = source; } }
-  const lastCall = { tm: 0, sg: 0 };
-  async function request(src, url, gapMs, headers) {
-    const label = SOURCE_NAMES[src];
-    const wait = gapMs - (Date.now() - lastCall[src]);
-    if (wait > 0) await sleep(wait);
-    lastCall[src] = Date.now();
-    for (let attempt = 0; attempt < 3; attempt++) {
-      let res;
-      try { res = await fetch(url, headers ? { headers } : undefined); } catch { throw new ApiError(`Couldn't reach ${label}. Check your connection.`, 0, src); }
-      if (res.status === 429) { const ra = +res.headers.get("Retry-After"); await sleep(ra > 0 && ra < 30 ? ra * 1000 : 1200 * (attempt + 1)); continue; }
-      if (res.status === 401 || res.status === 403) throw new ApiError(`The ${label} key isn't valid.`, 401, src);
-      if (!res.ok) throw new ApiError(`${label} returned an error (${res.status}).`, res.status, src);
-      return res.json();
-    }
-    throw new ApiError(`${label} is rate-limiting requests. Try again in a minute.`, 429, src);
+  // ---------- Search worker ----------
+  // All searching happens in the Cloudflare Worker (venue sites + Ticketmaster). Its address is in worker.json.
+  let WORKER = null;
+  async function workerUrl() {
+    if (WORKER) return WORKER;
+    try { const r = await fetch("worker.json", { cache: "no-cache" }); const j = await r.json(); WORKER = (safeUrl(j.url) || "").replace(/\/$/, "") || null; } catch {}
+    return WORKER;
   }
-  async function tm(path, params) {
-    const key = apiKey();
-    if (!key) throw new ApiError("Missing Ticketmaster key", 401, "tm");
-    return request("tm", `${TM}/${path}?${new URLSearchParams({ ...params, apikey: key })}`, 230); // ~5 requests/sec allowed
-  }
-  async function sg(path, params) {
-    const key = sgKey();
-    if (!key) throw new ApiError("Missing SeatGeek key", 401, "sg");
-    return request("sg", `${SG}/${path}?${new URLSearchParams({ ...params, client_id: key })}`, 150);
-  }
-  async function jb(path, params) {
-    const key = jbKey();
-    if (!key) throw new ApiError("Missing JamBase key", 401, "jb");
-    return request("jb", `${JB}/${path}?${new URLSearchParams(params)}`, 150, { Authorization: `Bearer ${key}`, Accept: "application/json" });
-  }
-
-  // JamBase gives venue-local times with no offset; convert using the venue's time zone.
-  function tzOffsetMs(ts, tz) {
-    const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(new Date(ts));
-    const g = (k) => +parts.find((x) => x.type === k).value;
-    return Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute"), g("second")) - ts;
-  }
-  function zonedToIso(local, tz) {
-    if (!local) return null;
-    if (/(Z|[+-]\d\d:?\d\d)$/.test(local)) { const d = parse(local); return d ? d.toISOString() : null; }
-    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(local);
-    if (!m) return null;
-    const guess = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
-    if (!tz) { const d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)); return d.toISOString(); }
-    try {
-      let utc = guess - tzOffsetMs(guess, tz);
-      const off2 = tzOffsetMs(utc, tz);
-      utc = guess - off2;
-      return new Date(utc).toISOString();
-    } catch { return new Date(guess).toISOString(); }
-  }
-
-  const artistKey = (a) => a.id ? "tm:" + a.id : "n:" + norm(a.name);
-
+  const artistKey = (a) => "n:" + norm(a.name);
   async function searchArtists(q) {
-    if (apiKey()) {
-      const data = await tm("attractions.json", { keyword: q, classificationName: "music", size: "8" });
-      return (data?._embedded?.attractions || []).map((a) => ({
-        id: a.id, name: a.name,
-        genre: [a.classifications?.[0]?.genre?.name, a.classifications?.[0]?.subGenre?.name].filter((x) => x && x !== "Undefined" && x !== "Other").join(" · "),
-        upcoming: a.upcomingEvents?._total ?? null,
-        img: (a.images || []).filter((i) => i.ratio === "1_1" || i.ratio === "4_3").sort((x, y) => x.width - y.width)[0]?.url || null,
-      }));
-    }
-    if (jbKey()) {
-      const data = await jb("artists", { artistName: q, perPage: "8" });
-      return (data?.artists || []).map((a) => ({
-        id: null, jbId: a.identifier || null, name: a.name,
-        genre: (a.genre || []).slice(0, 2).join(" · "),
-        upcoming: a["x-numUpcomingEvents"] ?? null, img: safeUrl(a.image),
-      }));
-    }
-    const data = await sg("performers", { q, per_page: "8" });
-    return (data?.performers || []).map((p) => ({
-      id: null, sgId: p.id, name: p.name,
-      genre: (p.genres || []).map((g) => g.name).slice(0, 2).join(" · ") || (p.taxonomies?.[0]?.name || "").replace(/_/g, " "),
-      upcoming: p.num_upcoming_events ?? null, img: safeUrl(p.image),
-    }));
+    const w = await workerUrl();
+    if (!w) return [];
+    const r = await fetch(`${w}/artists?${new URLSearchParams({ q })}`);
+    if (!r.ok) throw new Error("Couldn't search artists right now.");
+    const d = await r.json();
+    return (d.artists || []).map((a) => ({ id: null, name: String(a.name || "").slice(0, 120), img: safeUrl(a.img), fans: a.fans ?? null }));
   }
-
-  function mapTmEvent(e, artist) {
-    const v = e._embedded?.venues?.[0] || {};
-    const start = e.dates?.start || {};
-    const sales = e.sales || {};
-    const presales = (sales.presales || []).map((p) => ({ name: p.name || "Presale", start: p.startDateTime || null, end: p.endDateTime || null, url: safeUrl(p.url) }))
-      .filter((p) => p.start);
-    return {
-      id: e.id, source: "tm", name: e.name, url: safeUrl(e.url),
-      links: safeUrl(e.url) ? [{ site: "Ticketmaster", url: safeUrl(e.url) }] : [], publicFrom: "tm",
-      artistName: artist.name, artistKey: artistKey(artist),
-      showDate: start.localDate || null, showTime: start.localTime || null, showDateTime: start.dateTime || null,
-      dateTBA: !!(start.dateTBA || start.dateTBD), timeTBA: !!(start.timeTBA || start.noSpecificTime),
-      status: e.dates?.status?.code || "",
-      venue: v.name || "", city: [v.city?.name, v.state?.stateCode || v.country?.countryCode].filter(Boolean).join(", "),
-      publicStart: sales.public?.startTBD ? null : (sales.public?.startDateTime || null),
-      presales,
-    };
-  }
-  function mapSgEvent(e, artist) {
-    const v = e.venue || {};
-    const local = e.datetime_local || "";
-    const utc = e.datetime_utc || "";
-    return {
-      id: "sg-" + e.id, source: "sg", name: e.title || e.short_title || "", url: null,
-      links: safeUrl(e.url) ? [{ site: "SeatGeek", url: safeUrl(e.url) }] : [], publicFrom: null,
-      artistName: artist.name, artistKey: artistKey(artist),
-      showDate: e.date_tbd ? null : (local.slice(0, 10) || null), showTime: e.time_tbd ? null : (local.slice(11, 19) || null),
-      showDateTime: !e.date_tbd && utc ? utc + (/(Z|[+-]\d\d:?\d\d)$/.test(utc) ? "" : "Z") : null,
-      dateTBA: !!e.date_tbd, timeTBA: !!e.time_tbd,
-      status: /cancel/i.test(e.status || "") ? "cancelled" : "",
-      venue: v.name || "", city: [v.city, v.state || v.country].filter(Boolean).join(", "),
-      publicStart: null, presales: [],
-      sgListings: e.stats?.listing_count ?? null, sgLowest: e.stats?.lowest_price ?? null,
-    };
-  }
-
-  async function tmEventsFor(artist) {
-    const loc = S.location;
-    const params = { latlong: `${loc.lat},${loc.lon}`, radius: String(S.radius), unit: "miles", size: "100", sort: "date,asc", includeTBA: "yes", includeTBD: "yes" };
-    if (artist.id) params.attractionId = artist.id; else { params.keyword = artist.name; params.classificationName = "music"; }
-    const data = await tm("events.json", params);
-    let list = data?._embedded?.events || [];
-    if (!artist.id) { const n = norm(artist.name); list = list.filter((e) => (e._embedded?.attractions || []).some((a) => norm(a.name) === n) || norm(e.name).includes(n)); }
-    return list.map((e) => mapTmEvent(e, artist));
-  }
-  async function sgEventsFor(artist) {
-    if (artist.sgId === undefined) { // find this artist on SeatGeek once, then remember it
-      const data = await sg("performers", { q: artist.name, per_page: "10" });
-      const hit = (data?.performers || []).find((p) => norm(p.name) === norm(artist.name));
-      artist.sgId = hit ? hit.id : null;
-      if (hit && !artist.img && safeUrl(hit.image)) artist.img = safeUrl(hit.image);
-      save();
-    }
-    if (!artist.sgId) return [];
-    const loc = S.location;
-    const data = await sg("events", { "performers.id": String(artist.sgId), lat: String(loc.lat), lon: String(loc.lon), range: `${S.radius}mi`, per_page: "100", sort: "datetime_local.asc" });
-    return (data?.events || []).map((e) => mapSgEvent(e, artist));
-  }
-
-  function mapJbEvent(e, artist) {
-    const loc = e.location || {}, addr = loc.address || {};
-    const tz = addr["x-timezone"] || null;
-    const region = typeof addr.addressRegion === "object" ? (addr.addressRegion?.alternateName || addr.addressRegion?.name) : addr.addressRegion;
-    // Note: JamBase's offer "validFrom" is when JamBase added the link, not an on-sale time, so it isn't used.
-    const offers = (e.offers || []).map((o) => ({ url: safeUrl(o.url), category: o.category || "", seller: o.seller?.name || "" })).filter((o) => o.url);
-    const primary = offers.filter((o) => /primary/i.test(o.category));
-    const nice = (n) => (!n || /^ticketing site$/i.test(n) ? "Tickets" : n.replace(/^EventBrite$/, "Eventbrite"));
-    const links = primary.slice(0, 2).map((o) => ({ site: nice(o.seller), url: o.url }));
-    const jbUrl = safeUrl(e.url);
-    if (!links.length && jbUrl) links.push({ site: "JamBase", url: jbUrl });
-    const start = e.startDate || "";
-    return {
-      id: "jb-" + (e.identifier || Math.random().toString(36).slice(2)), source: "jb", name: e["x-customTitle"] || e.name || "", url: links[0]?.url || null,
-      links, publicFrom: null, publicStart: null, presales: [],
-      jbOnSale: primary.length > 0, jbSeller: primary.length ? nice(primary[0].seller) : null,
-      announcedAt: e.datePublished || null,
-      artistName: artist.name, artistKey: artistKey(artist),
-      showDate: start.slice(0, 10) || null, showTime: start.length > 10 ? start.slice(11, 19) : null,
-      showDateTime: start.length > 10 ? zonedToIso(start, tz) : null,
-      dateTBA: !start, timeTBA: start.length <= 10,
-      status: e.eventStatus === "cancelled" ? "cancelled" : (e.eventStatus === "postponed" || e.eventStatus === "rescheduled") ? e.eventStatus : "",
-      venue: loc.name || "", city: [addr.addressLocality, region].filter(Boolean).join(", "),
-    };
-  }
-  async function jbEventsFor(artist) {
-    if (artist.jbId === undefined) { // find this artist on JamBase once, then remember it
-      const data = await jb("artists", { artistName: artist.name, perPage: "10" });
-      const hit = (data?.artists || []).find((a) => norm(a.name) === norm(artist.name));
-      artist.jbId = hit ? hit.identifier : null;
-      if (hit && !artist.img && safeUrl(hit.image)) artist.img = safeUrl(hit.image);
-      save();
-    }
-    if (!artist.jbId) return [];
-    const loc = S.location;
-    const today = new Date(); const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    const data = await jb("events", { artistId: artist.jbId, geoLatitude: String(loc.lat), geoLongitude: String(loc.lon), geoRadiusAmount: String(S.radius), geoRadiusUnits: "mi", eventDateFrom: ymd, perPage: "100" });
-    return (data?.events || []).map((e) => mapJbEvent(e, artist));
-  }
-
-  // The same show often appears on several sites: same artist, same date, and the same venue or city.
-  const venueWords = (s) => norm(s).split(" ").filter((w) => w.length > 2 && !["the", "and", "theatre", "theater", "center", "centre", "arena", "hall", "club", "ballroom", "amphitheatre", "amphitheater", "stadium", "live", "music"].includes(w));
-  function sameShow(a, b) {
-    if (a.artistKey !== b.artistKey || !a.showDate || a.showDate !== b.showDate) return false;
-    const wa = venueWords(a.venue), wb = new Set(venueWords(b.venue));
-    if (wa.some((w) => wb.has(w))) return true;
-    const ca = norm(a.city.split(",")[0]), cb = norm(b.city.split(",")[0]);
-    return !!ca && ca === cb;
-  }
-  // Lists in priority order: Ticketmaster first (best times), then JamBase, then SeatGeek.
-  function mergeEvents(lists) {
-    const out = [];
-    for (const list of lists) {
-      for (const e of list) {
-        const m = out.find((x) => !x.sources.includes(e.source) && sameShow(x, e));
-        if (!m) { out.push({ ...e, sources: [e.source], presalesFrom: e.presales.length ? e.source : null }); continue; }
-        m.sources.push(e.source);
-        for (const l of e.links) if (!m.links.some((x) => x.url === l.url || x.site === l.site)) m.links.push(l);
-        if (!m.publicStart && e.publicStart) { m.publicStart = e.publicStart; m.publicFrom = e.publicFrom; }
-        if (!m.presales.length && e.presales.length) { m.presales = e.presales; m.presalesFrom = e.source; }
-        if (e.webSource && !m.webSource) { m.webSource = e.webSource; m.webNote = e.webNote; }
-        if (!m.url && e.url) m.url = e.url;
-        if (m.sgListings == null && e.sgListings != null) { m.sgListings = e.sgListings; m.sgLowest = e.sgLowest; }
-        if (e.jbOnSale && !m.jbOnSale) { m.jbOnSale = true; m.jbSeller = e.jbSeller; }
-        if (e.announcedAt && (!m.announcedAt || e.announcedAt < m.announcedAt)) m.announcedAt = e.announcedAt;
-      }
-    }
-    return out;
-  }
-
-  // ---------- Web-checked on-sale times ----------
-  // onsales.json sits next to this page. A scheduled web search updates it daily
-  // for the artists in watchlist.json near one area.
-  let webFeed = null;
-  // watchlist.json holds the shared watch list and the request-form settings.
-  let watchCfg = null;
-  async function loadWatchCfg() {
-    if (window.location.protocol === "file:") return null;
-    try { const r = await fetch("watchlist.json", { cache: "no-cache" }); watchCfg = r.ok ? await r.json() : null; } catch { watchCfg = null; }
-    return watchCfg;
-  }
-  const watchNames = () => [...(webFeed?.artists || []), ...(watchCfg?.artists || [])].map(norm);
-  const isWatched = (name) => watchNames().includes(norm(name));
-  const MAX_REQUESTS_PER_BROWSER = 15;
-  // Ask for an artist to be added to the web-search watch list (anonymous Google Form submission).
-  async function requestWatch(name) {
-    const form = watchCfg?.requestForm;
-    if (!form?.action || !form?.entry || !/^https:\/\/docs\.google\.com\/forms\//.test(form.action)) return false;
-    if (!webFeed || !feedCoversMe() || isWatched(name)) return false;
-    S.requested = S.requested || {};
-    if (S.requested[norm(name)] || Object.keys(S.requested).length >= MAX_REQUESTS_PER_BROWSER) return false;
-    try {
-      await fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams({ [form.entry]: name.slice(0, 100) }) });
-      S.requested[norm(name)] = new Date().toISOString(); save();
-      return true;
-    } catch { return false; }
-  }
-  // "Update" also asks for a fresh web search (sent through the same form; a GitHub automation starts it).
-  const WEB_CHECK_GAP_MS = 30 * 60 * 1000, WEB_CHECK_WAIT_MS = 45 * 60 * 1000;
-  const webCheckPending = () => { const t = parse(S.lastWebReq); return !!t && Date.now() - t.getTime() < WEB_CHECK_WAIT_MS && (webFeed?.checkedAt || null) === (S.webReqBase || null); };
-  async function requestWebCheck() {
-    const form = watchCfg?.requestForm;
-    if (!form?.action || !form?.entry || !webFeed || !feedCoversMe()) return null;
-    const last = parse(S.lastWebReq);
-    if (last && Date.now() - last.getTime() < WEB_CHECK_GAP_MS) return "recent";
-    try {
-      await fetch(form.action, { method: "POST", mode: "no-cors", body: new URLSearchParams({ [form.entry]: "__CHECK_NOW__" }) });
-      S.lastWebReq = new Date().toISOString(); S.webReqBase = webFeed?.checkedAt || null; save();
-      watchForResults();
-      return "sent";
-    } catch { return null; }
-  }
-  let pollT = null;
-  function watchForResults() {
-    clearInterval(pollT);
-    if (!webCheckPending()) return;
-    pollT = setInterval(async () => {
-      if (document.visibilityState !== "visible") return;
-      const before = S.webReqBase || null;
-      await loadWebFeed();
-      if ((webFeed?.checkedAt || null) !== before) { clearInterval(pollT); await check({ quiet: true }); toast("New web search results are in."); }
-      else if (!webCheckPending()) { clearInterval(pollT); renderList(); }
-    }, 60000);
-  }
-  async function requestMissing() { for (const a of S.artists) if (!isWatched(a.name)) await requestWatch(a.name); renderChips(); }
-  async function loadWebFeed() {
-    if (window.location.protocol === "file:") return null;
-    try {
-      const r = await fetch("onsales.json", { cache: "no-cache" });
-      const j = r.ok ? await r.json() : null;
-      webFeed = j && Array.isArray(j.items) ? j : null;
-    } catch { webFeed = null; }
-    return webFeed;
-  }
-  function milesBetween(a, b) {
-    const R = 3958.8, rad = (x) => (x * Math.PI) / 180;
-    const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
-    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(h));
-  }
-  function feedCoversMe() {
-    const L = webFeed?.location;
-    if (!L || !S.location || typeof L.lat !== "number") return false;
-    return milesBetween(L, S.location) <= Math.max(S.radius, webFeed.radius || 50);
-  }
-  const SITE_LABELS = { "ticketmaster.com": "Ticketmaster", "livenation.com": "Live Nation", "axs.com": "AXS", "dice.fm": "DICE", "seetickets.us": "See Tickets", "eventbrite.com": "Eventbrite", "etix.com": "eTix", "tixr.com": "Tixr", "ticketweb.com": "TicketWeb", "seatgeek.com": "SeatGeek", "prekindle.com": "Prekindle", "opendate.io": "OpenDate", "songkick.com": "Songkick", "bandsintown.com": "Bandsintown" };
+  const SITE_LABELS = { "ticketmaster.com": "Ticketmaster", "livenation.com": "Live Nation", "axs.com": "AXS", "dice.fm": "DICE", "seetickets.us": "See Tickets", "eventbrite.com": "Eventbrite", "etix.com": "eTix", "tixr.com": "Tixr", "ticketweb.com": "TicketWeb" };
   function hostLabel(u) {
-    try { const h = new URL(u).hostname.replace(/^www\./, ""); const k = Object.keys(SITE_LABELS).find((d) => h === d || h.endsWith("." + d)); return k ? SITE_LABELS[k] : h; } catch { return "Link"; }
+    try { const h = new URL(u).hostname.replace(/^www\./, ""); const k = Object.keys(SITE_LABELS).find((d) => h === d || h.endsWith("." + d)); return k ? SITE_LABELS[k] : "Tickets"; } catch { return "Tickets"; }
   }
   const validIso = (v) => (v && parse(v) ? parse(v).toISOString() : null);
-  function mapWebItem(it, artist, i) {
-    const ticket = safeUrl(it.ticketUrl), source = safeUrl(it.sourceUrl);
-    const presales = (Array.isArray(it.presales) ? it.presales : []).map((p) => ({ name: String(p.name || "Presale").slice(0, 60), start: validIso(p.start), end: validIso(p.end), url: safeUrl(p.url) }))
-      .filter((p) => p.start);
+  function mapEvent(e, i) {
+    const artist = S.artists.find((a) => norm(a.name) === norm(e.artist)) || { name: String(e.artist || "") };
+    const ticket = safeUrl(e.ticketUrl), source = safeUrl(e.sourceUrl);
+    const links = ticket ? [{ site: hostLabel(ticket), url: ticket }] : [];
+    if (source && source !== ticket && !/ticketmaster\.com/.test(source)) links.push({ site: "Venue page", url: source });
     return {
-      id: "web-" + i, source: "web", name: String(it.event || "").slice(0, 160), url: ticket,
-      links: ticket ? [{ site: hostLabel(ticket), url: ticket }] : [],
-      publicStart: validIso(it.generalOnsale), publicFrom: it.generalOnsale ? "web" : null, presales,
-      webSource: source, webNote: String(it.note || "").slice(0, 200),
+      v2: true, id: `${artistKey(artist)}|${e.showDate}|${norm(e.venue)}|${i}`,
+      sources: (Array.isArray(e.sources) ? e.sources : [e.source]).map(String),
+      name: String(e.title || "").slice(0, 160), url: ticket, links,
+      publicStart: validIso(e.generalOnsale), publicDateOnly: !!e.generalOnsaleDateOnly,
+      presales: (Array.isArray(e.presales) ? e.presales : []).map((p) => ({ name: String(p.name || "Presale").slice(0, 80), start: validIso(p.start), end: validIso(p.end), code: p.code ? String(p.code).slice(0, 40) : null, dateOnly: !!p.dateOnly })).filter((p) => p.start),
       artistName: artist.name, artistKey: artistKey(artist),
-      showDate: /^\d{4}-\d{2}-\d{2}$/.test(it.showDate || "") ? it.showDate : null, showTime: null, showDateTime: null,
-      dateTBA: !it.showDate, timeTBA: true, status: /cancel/i.test(it.status || "") ? "cancelled" : "",
-      venue: String(it.venue || "").slice(0, 120), city: String(it.city || "").slice(0, 80),
+      showDate: /^\d{4}-\d{2}-\d{2}$/.test(e.showDate || "") ? e.showDate : null, showTime: /^\d{2}:\d{2}$/.test(e.showTime || "") ? e.showTime : null, showDateTime: null,
+      dateTBA: !e.showDate, status: /cancel/i.test(e.status || "") ? "cancelled" : "", onSaleNow: e.status === "onsale",
+      venue: String(e.venue || "").slice(0, 120), city: String(e.city || "").slice(0, 80),
     };
   }
-  function webEventsFor(artist) {
-    if (!webFeed || !feedCoversMe()) return [];
-    return webFeed.items.map((it, i) => [it, i]).filter(([it]) => norm(it.artist) === norm(artist.name)).map(([it, i]) => mapWebItem(it, artist, i));
-  }
-  const webWatches = (a) => !!webFeed && feedCoversMe() && (webFeed.artists || []).some((n) => norm(n) === norm(a.name));
 
   // ---------- Derived data ----------
   function isPastShow(ev) {
@@ -603,31 +296,26 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
       for (const p of ev.presales) {
         const d = parse(p.start); if (!d) continue;
         const end = parse(p.end);
-        if (d.getTime() > now || (end && end.getTime() > now)) out.push({ kind: "presale", label: p.name, at: d, end, live: d.getTime() <= now, ev, url: p.url || ev.url, fromWeb: ev.presalesFrom === "web" });
+        if (d.getTime() > now || (end && end.getTime() > now)) out.push({ kind: "presale", label: p.name, code: p.code, dateOnly: p.dateOnly, at: d, end, live: d.getTime() <= now, ev, url: ev.url });
       }
       const g = parse(ev.publicStart);
-      if (g && g.getTime() > now) out.push({ kind: "general", label: "General on-sale", at: g, end: null, live: false, ev, url: ev.url, fromWeb: ev.publicFrom === "web" });
+      if (g && g.getTime() > now) out.push({ kind: "general", label: "General on-sale", dateOnly: ev.publicDateOnly, at: g, end: null, live: false, ev, url: ev.url });
     }
     return out.sort((a, b) => (a.live === b.live ? a.at - b.at : a.live ? -1 : 1));
   }
-  const FRESH_DAYS = 14;
-  function isFresh(ev) { const d = parse(ev.announcedAt); return !!d && Date.now() - d.getTime() < FRESH_DAYS * 86400000; }
-  function agoText(d) { const days = Math.floor((Date.now() - d.getTime()) / 86400000); return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`; }
   function groups() {
     const upcoming = saleMoments();
-    const onsale = [], tba = [], all = [], fresh = [];
+    const onsale = [], tba = [], all = [];
     for (const ev of S.events) {
       if (isPastShow(ev)) continue;
       all.push(ev);
       if (ev.status === "cancelled") continue;
-      if (isFresh(ev)) fresh.push(ev);
       const g = parse(ev.publicStart);
-      if (g && g.getTime() <= Date.now()) onsale.push(ev);
-      else if (!g && !ev.presales.length) { if (ev.sgListings > 0 || ev.jbOnSale) onsale.push(ev); else tba.push(ev); }
+      if ((g && g.getTime() <= Date.now()) || (!g && ev.onSaleNow)) onsale.push(ev);
+      else if (!g && !ev.presales.length) tba.push(ev);
     }
     const byShow = (a, b) => (a.showDate || "9999").localeCompare(b.showDate || "9999");
-    fresh.sort((a, b) => String(b.announcedAt).localeCompare(String(a.announcedAt)));
-    return { upcoming, fresh, onsale: onsale.sort(byShow), tba: tba.sort(byShow), all: all.sort(byShow) };
+    return { upcoming, onsale: onsale.sort(byShow), tba: tba.sort(byShow), all: all.sort(byShow) };
   }
 
   // ---------- Calendar (.ics) ----------
@@ -640,7 +328,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     for (const m of moments) {
       const ev = m.ev;
       const start = m.at, end = new Date(start.getTime() + 30 * 60000);
-      const title = `🎟 ${ev.artistName}: ${m.label} (${ev.city || ev.venue})`;
+      const title = `🎟 ${ev.artistName}: ${m.label}${m.dateOnly ? " (time TBA)" : ""} (${ev.venue || ev.city})`;
       const desc = [`${ev.name}`, `${ev.venue}${ev.city ? ", " + ev.city : ""}`, ev.showDate ? `Show: ${ev.showDate}` : "", m.url ? `Tickets: ${m.url}` : ""].filter(Boolean).join("\n");
       lines.push("BEGIN:VEVENT",
         `UID:${ev.id}-${m.kind}-${start.getTime()}@ticket-finder`,
@@ -711,7 +399,6 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
         } catch (e) {
           if (my !== seq) return;
           items = []; head = `<div class="opt muted">${esc(e.message || "Couldn't search right now.")}</div>`; active = -1; paint();
-          if (e.status === 401 && e.source !== "jb") { keyEditing = true; renderKey(); }
         }
       })();
       return pending;
@@ -768,19 +455,19 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   }
   const searchCache = new Map();
   async function cachedSearch(q) {
-    const key = activeSources().join() + "|" + norm(q);
+    const key = norm(q);
     if (!searchCache.has(key)) searchCache.set(key, searchArtists(q).catch((e) => { searchCache.delete(key); throw e; }));
     return searchCache.get(key);
   }
   async function artistSuggest(q) {
     const nq = norm(q);
     let head = "";
-    let list = anyKey() ? await cachedSearch(q) : [];
+    let list = await cachedSearch(q);
     const close = list.some((a) => norm(a.name).startsWith(nq) || nq.startsWith(norm(a.name)));
     if (!close && nq.length >= 3) {
       const fix = await mbCorrect(q);
       if (fix && norm(fix) !== nq) {
-        const fixed = anyKey() ? await cachedSearch(fix) : [{ id: null, name: fix }];
+        const fixed = await cachedSearch(fix);
         if (fixed.length) { list = fixed; head = `<div class="opt-head">Showing results for <b>${esc(fix)}</b></div>`; }
       }
     }
@@ -790,7 +477,7 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   }
   function renderArtistOpt(a) {
     if (a.kind === "raw") return `<span class="av ph plus" aria-hidden="true">+</span><span class="opt-text">Add "${esc(a.name)}" as typed<small>Matched by name</small></span>`;
-    const meta = [a.genre, a.upcoming != null ? `${a.upcoming} upcoming show${a.upcoming === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+    const meta = a.fans ? `${a.fans >= 1e6 ? (a.fans / 1e6).toFixed(1) + "M" : a.fans >= 1e3 ? Math.round(a.fans / 1e3) + "K" : a.fans} fans` : "";
     return `${avatar(a.img, a.name, 40)}<span class="opt-text">${esc(a.name)}${meta ? `<small>${esc(meta)}</small>` : ""}</span>`;
   }
 
@@ -811,16 +498,8 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   function renderChips() {
     const el = $("chips");
     $("elsewhereBox").hidden = !S.artists.length;
-    const watched = webFeed && feedCoversMe() ? (webFeed.artists || []) : [];
-    const showNote = watched.length && S.artists.some((a) => webWatches(a) || S.requested?.[norm(a.name)]);
-    $("webNote").hidden = !showNote;
-    if (showNote) {
-      const when = parse(webFeed.checkedAt);
-      const canRequest = !!watchCfg?.requestForm?.action;
-      $("webNote").innerHTML = `⏱ Exact on-sale times found by web search.${canRequest ? " ⏳ Added, and included from the next search (daily at 9:38 AM)." : ""}`;
-    }
     if (!S.artists.length) { el.innerHTML = `<div class="empty">No artists yet.</div>`; return; }
-    el.innerHTML = S.artists.map((a, i) => `<span class="chip" ${webWatches(a) ? 'title="On-sale times checked by a daily web search"' : ""}>${avatar(a.img, a.name, 28)}${esc(a.name)}${webWatches(a) ? '<span class="watch">⏱</span>' : (S.requested?.[norm(a.name)] ? '<span class="watch" style="color:var(--muted)" title="Requested: exact on-sale times start after the next web check">⏳</span>' : "")}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
+    el.innerHTML = S.artists.map((a, i) => `<span class="chip">${avatar(a.img, a.name, 28)}${esc(a.name)}<button type="button" aria-label="Remove ${esc(a.name)}" data-rm="${i}">×</button></span>`).join("");
     const where = S.location ? S.location.label.replace(/^your current location$/, "") : "";
     $("elsewhere").innerHTML = S.artists.map((a) => {
       const q = `${a.name} concert tickets ${where} AXS OR DICE OR Eventbrite OR presale`.replace(/\s+/g, " ").trim();
@@ -832,45 +511,33 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     $("locStatus").className = "hint" + (S.location ? " ok" : "");
     $("locStatus").textContent = S.location ? `Searching around ${S.location.label}` : "Set your location to start.";
   }
-  function renderKey() {
-    $("keyCard").hidden = anyKey() && !keyEditing;
-    $("changeKey").hidden = !!(DEFAULT_API_KEY && DEFAULT_SEATGEEK_CLIENT_ID && DEFAULT_JAMBASE_KEY);
-    const st = (built, saved) => built ? "(built in)" : saved ? "(saved)" : "";
-    $("tmKeyState").textContent = st(DEFAULT_API_KEY, S.apiKey);
-    $("sgKeyState").textContent = st(DEFAULT_SEATGEEK_CLIENT_ID, S.sgKey);
-    $("keyInput").disabled = !!DEFAULT_API_KEY;
-    $("sgKeyInput").disabled = !!DEFAULT_SEATGEEK_CLIENT_ID;
-    $("jbKeyState").textContent = st(DEFAULT_JAMBASE_KEY, S.jbKey);
-    $("jbKeyInput").disabled = !!DEFAULT_JAMBASE_KEY;
-    const names = activeSources().map((k) => SOURCE_NAMES[k]);
-    const list = names.length ? names : Object.values(SOURCE_NAMES);
-    $("srcList").textContent = list.length > 1 ? list.slice(0, -1).join(", ") + " and " + list[list.length - 1] : list[0];
+  function renderSources() {
+    const tm = S.sources && S.sources.Ticketmaster;
+    $("tmNote").textContent = tm && tm !== "no key" && !/^error/.test(tm) ? " and Ticketmaster" : "";
   }
-  let keyEditing = false;
 
   function momentHtml(m) {
     const ev = m.ev;
     const soon = m.live || m.at.getTime() - Date.now() < 48 * 3600000;
     const tags = [`<span class="tag ${m.kind === "presale" ? "presale" : "general"}">${esc(m.label)}</span>`];
+    if (m.code) tags.push(`<span class="tag presale" title="Presale password">Code: ${esc(m.code)}</span>`);
+    if (m.dateOnly && !m.live) tags.push(`<span class="tag tba" title="The venue lists the date but not the time. Many on-sales start at 10 AM.">Time not listed</span>`);
     if (m.live) tags.push(`<span class="tag onsale">Happening now${m.end ? " · ends " + esc(fmtShort(m.end)) + " " + esc(fmtTime(m.end)) : ""}</span>`);
     else tags.push(`<span class="tag tba">${esc(rel(m.at))}</span>`);
     const g = parse(ev.publicStart);
     if (m.kind === "presale" && g && g.getTime() > Date.now()) tags.push(`<span class="tag general">General ${esc(fmtShort(g))} ${esc(fmtTime(g))}</span>`);
-    if (m.fromWeb) tags.push(`<span class="tag web" title="Found by the daily web search. Double-check on the ticket site.">Found by web search</span>`);
     const idx = currentMoments.indexOf(m);
     return `<div class="item">
-      <div class="when ${soon ? "soon" : ""}"><div class="lbl">${m.live ? "Live" : esc(m.kind === "presale" ? "Presale" : "On sale")}</div><div class="d">${esc(m.live ? "Now" : fmtTime(m.at))}</div><div class="t">${esc(fmtShort(m.at))}</div></div>
+      <div class="when ${soon ? "soon" : ""}"><div class="lbl">${m.live ? "Live" : esc(m.kind === "presale" ? "Presale" : "On sale")}</div><div class="d">${esc(m.live ? "Now" : m.dateOnly ? fmtShort(m.at) : fmtTime(m.at))}</div><div class="t">${esc(m.dateOnly ? m.at.toLocaleDateString(undefined, { weekday: "short" }) : fmtShort(m.at))}</div></div>
       <div>
         <div class="artist">${avatar(imgForEvent(ev), ev.artistName, 26)}${esc(ev.artistName)}</div>
         <div class="meta">${esc(showLine(ev))}</div>
         ${ev.name && norm(ev.name) !== norm(ev.artistName) ? `<div class="ev">${esc(ev.name)}</div>` : ""}
         <div class="tags">${tags.join("")}</div>
-        ${ev.webNote && m.fromWeb ? `<div class="note">${esc(ev.webNote)}</div>` : ""}
       </div>
       <div class="side">
         ${m.url ? `<a href="${esc(m.url)}" target="_blank" rel="noopener">Tickets ↗</a>` : ""}
         ${ev.links.filter((l) => l.url !== m.url).slice(0, 2).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.site)} ↗</a>`).join("")}
-        ${m.fromWeb && ev.webSource && ev.webSource !== m.url ? `<a href="${esc(ev.webSource)}" target="_blank" rel="noopener">Source ↗</a>` : ""}
         ${m.live ? "" : `<button class="ghost small" type="button" data-cal="${idx}">Remind me</button>`}
       </div>
     </div>`;
@@ -888,13 +555,11 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     if (ev.status === "cancelled") tags.push(`<span class="tag general">Cancelled</span>`);
     else if (ev.status === "rescheduled" || ev.status === "postponed") tags.push(`<span class="tag tba">${esc(ev.status)}</span>`);
     const g = parse(ev.publicStart);
-    if (g) tags.push(`<span class="tag ${g.getTime() <= Date.now() ? "onsale" : "general"}">${g.getTime() <= Date.now() ? "On sale since" : "General on-sale"} ${esc(fmtShort(g))}</span>`);
-    else if (ev.jbOnSale) tags.push(`<span class="tag onsale">On sale${ev.jbSeller && ev.jbSeller !== "Tickets" ? " at " + esc(ev.jbSeller) : ""}</span>`);
-    else if (ev.sgListings > 0) tags.push(`<span class="tag onsale">Tickets listed on SeatGeek${ev.sgLowest ? " from $" + esc(Math.round(ev.sgLowest)) : ""}</span>`);
+    if (g && g.getTime() <= Date.now()) tags.push(`<span class="tag onsale">On sale now</span>`);
+    else if (g) tags.push(`<span class="tag general">General on-sale ${esc(fmtShort(g))}${ev.publicDateOnly ? "" : " " + esc(fmtTime(g))}</span>`);
+    else if (ev.onSaleNow) tags.push(`<span class="tag onsale">On sale now</span>`);
     else tags.push(`<span class="tag tba">On-sale date not listed yet</span>`);
-    for (const p of ev.presales) { const d = parse(p.start); if (d && d.getTime() > Date.now()) tags.push(`<span class="tag presale">${esc(p.name)} ${esc(fmtShort(d))}</span>`); }
-    if (isFresh(ev)) tags.unshift(`<span class="tag new">Announced ${esc(agoText(parse(ev.announcedAt)))}</span>`);
-    if (ev.publicFrom === "web" || ev.presalesFrom === "web") tags.push(`<span class="tag web">Found by web search</span>`);
+    for (const p of ev.presales) { const d = parse(p.start); if (d && d.getTime() > Date.now()) tags.push(`<span class="tag presale">${esc(p.name)} ${esc(fmtShort(d))}${p.dateOnly ? "" : " " + esc(fmtTime(d))}</span>`); }
     const d = ev.showDate && !ev.dateTBA ? parse(ev.showDate + "T12:00:00") : null;
     return `<div class="item">
       <div class="when"><div class="lbl">Show</div><div class="d">${esc(d ? fmtShort(d) : "TBA")}</div><div class="t">${esc(d ? d.toLocaleDateString(undefined, { weekday: "short" }) : "")}</div></div>
@@ -904,22 +569,22 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
         ${ev.name && norm(ev.name) !== norm(ev.artistName) ? `<div class="ev">${esc(ev.name)}</div>` : ""}
         <div class="tags">${tags.join("")}</div>
       </div>
-      <div class="side">${ev.links.slice(0, 3).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.site)} ↗</a>`).join("")}${ev.webSource && (ev.publicFrom === "web" || ev.presalesFrom === "web") ? `<a href="${esc(ev.webSource)}" target="_blank" rel="noopener">Source ↗</a>` : ""}</div>
+      <div class="side">${ev.links.slice(0, 3).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.site)} ↗</a>`).join("")}</div>
     </div>`;
   }
 
   function renderList() {
     const G = groups();
-    const defs = [["upcoming", "Going on sale"], ["fresh", "Just announced"], ["onsale", "On sale now"], ["tba", "No on-sale date yet"], ["all", "All shows"]];
+    const defs = [["upcoming", "Going on sale"], ["onsale", "On sale now"], ["tba", "No on-sale date yet"], ["all", "All shows"]];
+    if (!defs.some(([k]) => k === tab)) tab = "upcoming";
     $("tabs").innerHTML = defs.map(([k, l]) => `<button type="button" class="tab ${tab === k ? "on" : ""}" data-tab="${k}">${l}<span class="n">${G[k].length}</span></button>`).join("");
     const fmtAt = (d) => new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-    $("checked").textContent = (S.fetchedAt ? `Last updated ${fmtAt(S.fetchedAt)}` : "") +
-      (webCheckPending() ? ` · Web search for on-sale times running (started ${new Date(S.lastWebReq).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}). Results in about 15–25 minutes.` : "");
+    $("checked").textContent = S.fetchedAt ? `Last searched ${fmtAt(S.fetchedAt)}` : "";
 
     let head = "";
-    if (!anyKey() && !webFeed) head = `<div class="banner"><b>One-time setup:</b> add a Ticketmaster, JamBase or SeatGeek key (left panel) to start searching.</div>`;
-    else if (!S.location) head = `<div class="banner"><b>Where are you?</b> Set your location to see shows near you.</div>`;
-    else if (!S.artists.length) head = `<div class="banner"><b>Add some artists.</b> Search for the artists you want to follow, and their presales and on-sale dates near you will show up here.</div>`;
+    if (!S.location) head = `<div class="banner"><b>Where are you?</b> Set your location to see shows near you.</div>`;
+    else if (!S.artists.length) head = `<div class="banner"><b>Add some artists.</b> Add the artists you want to follow, then press <b>Search</b>. Their presales and on-sale dates near you will show up here.</div>`;
+    else if (!S.fetchedAt) head = `<div class="banner">Press <b>Search</b> to check venue sites for your artists.</div>`;
 
     currentMoments = G.upcoming;
     $("calAllBtn").hidden = !(tab === "upcoming" && G.upcoming.some((m) => !m.live));
@@ -932,68 +597,53 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
           if (label !== lastDay) { body += `<div class="day">${esc(label)}</div>`; lastDay = label; }
           body += momentHtml(m);
         }
-      } else if (S.fetchedAt && !apiKey() && !S.artists.some(webWatches) && S.artists.some((a) => S.requested?.[norm(a.name)])) body = `<div class="banner"><b>Your artists are queued for the web search (⏳).</b> Exact presale and on-sale times show up here after the next search, which runs daily at 9:38 AM Pacific. Meanwhile, "Just announced" and "On sale now" are already up to date.</div>`;
-      else if (S.fetchedAt && !apiKey() && !S.artists.some(webWatches)) body = `<div class="banner"><b>None of your artists are on the web-search watch list.</b> Exact times come from a Ticketmaster key or the daily web search. Until then, check "Just announced": new shows usually go on sale within a few days, and the ticket link shows the time.</div>`;
-      else if (S.fetchedAt) body = `<div class="empty">No upcoming presales or on-sales near you for your artists right now. Check "Just announced" for new shows, which usually go on sale within days.</div>`;
+      } else if (S.fetchedAt) body = `<div class="empty">No upcoming presales or on-sales for your artists at these venues right now. Check "All shows" for shows already on sale.</div>`;
     } else {
       const items = G[tab];
-      const emptyMsg = tab === "fresh" ? `No shows near you announced in the last ${FRESH_DAYS} days.` : "Nothing here right now.";
+      const emptyMsg = "Nothing here right now.";
       body = items.length ? items.map(eventHtml).join("") : (S.fetchedAt ? `<div class="empty">${emptyMsg}</div>` : "");
     }
     $("list").innerHTML = head + body;
   }
 
-  function renderAll() { renderChips(); renderLoc(); renderKey(); renderList(); document.querySelector(".grid").classList.toggle("ready", !!(anyKey() && S.location && S.artists.length)); }
+  function renderAll() { renderChips(); renderLoc(); renderSources(); renderList(); document.querySelector(".grid").classList.toggle("ready", !!(S.location && S.artists.length)); }
 
-  // ---------- Check ----------
+  // ---------- Search ----------
   let checking = false;
-  const fetchKey = () => JSON.stringify([S.location?.lat, S.location?.lon, S.radius, activeSources().join(), S.artists.map((a) => a.id || a.name)]);
+  const fetchKey = () => JSON.stringify([S.location?.lat, S.location?.lon, S.radius, S.artists.map((a) => a.name)]);
   async function check({ quiet = false } = {}) {
     if (checking) return;
     if (!S.location) { if (!quiet) toast("Set your location first."); return; }
     if (!S.artists.length) { if (!quiet) toast("Add an artist first."); return; }
+    const w = await workerUrl();
+    if (!w) { if (!quiet) toast("Search isn't available right now."); return; }
     checking = true;
-    await loadWebFeed();
-    if (!anyKey() && !webFeed) { checking = false; if (!quiet) toast("Add a data source key first."); return; }
-    $("checkBtn").disabled = true; $("checkBtn").textContent = "Updating…";
-    const bar = $("progress"); bar.hidden = false; bar.firstElementChild.style.width = "4%";
-    const sources = activeSources();
-    const dead = {};                 // source -> fatal error (bad key / offline)
-    const lists = { tm: new Map(), jb: new Map(), sg: new Map(), web: new Map() };
-    for (const a of S.artists) for (const ev of webEventsFor(a)) lists.web.set(ev.id, ev);
-    const failed = new Set();
-    const total = Math.max(1, S.artists.length * sources.length); let done = 0;
-    for (const a of S.artists) {
-      for (const src of sources) {
-        if (!dead[src]) {
-          const fn = { tm: tmEventsFor, jb: jbEventsFor, sg: sgEventsFor }[src];
-          try { for (const ev of await fn(a)) if (!lists[src].has(ev.id)) lists[src].set(ev.id, ev); }
-          catch (e) { if (e.status === 401 || e.status === 0) dead[src] = e; else failed.add(a.name); }
-        }
-        bar.firstElementChild.style.width = `${Math.round((++done / total) * 100)}%`;
-      }
-    }
-    const working = sources.filter((s) => !dead[s]);
-    if (working.length || lists.web.size || !sources.length) {
-      // If a source failed this time, keep its shows from the last check rather than dropping them.
-      const keep = (src) => dead[src] ? S.events.filter((e) => (e.sources || [e.source]).includes(src) && e.source === src) : [];
-      S.events = mergeEvents([[...lists.tm.values(), ...keep("tm")], [...lists.web.values()], [...lists.jb.values(), ...keep("jb")], [...lists.sg.values(), ...keep("sg")]]);
-      S.feedAt = webFeed?.checkedAt || null;
+    $("checkBtn").disabled = true; $("checkBtn").textContent = "Searching…";
+    const bar = $("progress"); bar.hidden = false; bar.firstElementChild.style.width = "30%";
+    const grow = setInterval(() => { const cur = parseFloat(bar.firstElementChild.style.width) || 30; bar.firstElementChild.style.width = Math.min(90, cur + 8) + "%"; }, 600);
+    let err = null, data = null;
+    try {
+      const r = await fetch(`${w}/search?${new URLSearchParams({ artists: S.artists.map((a) => a.name).join("|"), lat: String(S.location.lat), lon: String(S.location.lon), radius: String(S.radius) })}`);
+      data = await r.json();
+      if (!r.ok || data.error) err = data.error || `Search failed (${r.status}).`;
+    } catch { err = "Couldn't reach the search. Check your connection."; }
+    clearInterval(grow); bar.firstElementChild.style.width = "100%";
+    if (!err) {
+      S.events = (data.events || []).map(mapEvent);
+      S.sources = data.sources || null;
       S.fetchedAt = new Date().toISOString();
       S.fetchKey = fetchKey();
       save();
     }
     checking = false;
-    $("checkBtn").disabled = false; $("checkBtn").textContent = "Update";
+    $("checkBtn").disabled = false; $("checkBtn").textContent = "Search";
     setTimeout(() => { bar.hidden = true; bar.firstElementChild.style.width = "0"; }, 400);
     renderAll();
-    // An expired JamBase trial shouldn't nag on every visit: only mention it when someone taps "Update".
-    const deadErrs = Object.values(dead).filter((e) => !(quiet && e.source === "jb"));
-    if (deadErrs.length) {
-      toast(deadErrs.map((e) => e.source === "jb" && e.status === 401 ? "JamBase key isn't working (the trial may have ended)." : e.message).join(" "));
-      if (deadErrs.some((e) => e.status === 401 && e.source !== "jb")) { keyEditing = true; renderKey(); }
-    } else if (failed.size) toast(`Couldn't fully check: ${[...failed].join(", ")}`);
-    else if (!quiet) { const n = S.events.filter((e) => !isPastShow(e)).length; toast(`Found ${n} upcoming show${n === 1 ? "" : "s"} near you.`); }
+    if (err) { if (!quiet) toast(err); return; }
+    if (!quiet) {
+      const n = S.events.filter((e) => !isPastShow(e)).length, sales = saleMoments().length;
+      toast(n ? `Found ${n} show${n === 1 ? "" : "s"}${sales ? `, ${sales} upcoming presale${sales === 1 ? "" : "s"}/on-sale${sales === 1 ? "" : "s"}` : ""}.` : `No shows for your artists at ${data.venuesChecked || 0} nearby venues right now.`);
+    }
   }
   let autoT;
   function scheduleCheck() { clearTimeout(autoT); autoT = setTimeout(() => check({ quiet: true }), 500); }
@@ -1027,10 +677,9 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
   $("artistForm").addEventListener("submit", (e) => { e.preventDefault(); artistTA.submit(); });
   function addArtist(a) {
     if (S.artists.some((x) => (a.id && x.id === a.id) || norm(x.name) === norm(a.name))) { toast(`${a.name} is already on your list.`); return; }
-    S.artists.push({ id: a.id || null, sgId: a.sgId, jbId: a.jbId, name: a.name, img: safeUrl(a.img) || null }); // undefined ids are looked up on the first check
+    S.artists.push({ id: null, name: a.name, img: safeUrl(a.img) || null });
     S.artists.sort((x, y) => x.name.localeCompare(y.name));
     save(); renderAll(); toast(`Added ${a.name}`); scheduleCheck();
-    requestWatch(a.name).then((ok) => { if (ok) renderChips(); });
   }
   $("chips").addEventListener("click", (e) => {
     const b = e.target.closest("[data-rm]"); if (!b) return;
@@ -1039,17 +688,6 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     save(); renderAll();
   });
 
-  // ---------- Key ----------
-  $("keyForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const k = $("keyInput").value.trim(), g = $("sgKeyInput").value.trim(), j = $("jbKeyInput").value.trim();
-    if (!k && !g && !j) { if (anyKey()) { keyEditing = false; renderKey(); } return; }
-    if (j) { S.jbKey = j; for (const a of S.artists) if (a.jbId === null) delete a.jbId; }
-    if (k) { S.apiKey = k; tab = "upcoming"; }
-    if (g) { S.sgKey = g; for (const a of S.artists) if (a.sgId === null) delete a.sgId; }
-    keyEditing = false; save(); $("keyInput").value = ""; $("sgKeyInput").value = ""; $("jbKeyInput").value = ""; renderAll(); toast("Saved."); scheduleCheck();
-  });
-  $("changeKey").addEventListener("click", () => { keyEditing = true; renderKey(); $("keyCard").scrollIntoView({ behavior: "smooth", block: "center" }); });
   $("resetAll").addEventListener("click", () => {
     const b = $("resetAll");
     if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Tap again to clear everything"; setTimeout(() => { b.dataset.confirm = ""; b.textContent = "Clear all my data"; }, 4000); return; }
@@ -1092,25 +730,16 @@ const DEFAULT_JAMBASE_KEY = "jbd_trial_XHn3CXk1WQjq_aiQb6p5MgemuObkMGkff2fb22K6G
     if (!fresh.length) return;
     const names = fresh.slice(0, 6).map((a) => a.name).join(", ") + (fresh.length > 6 ? ` and ${fresh.length - 6} more` : "");
     $("importBanner").innerHTML = `<div class="banner"><b>Someone shared their artists with you:</b> ${esc(names)}<div class="row"><button type="button" id="impYes">Add ${fresh.length} artist${fresh.length === 1 ? "" : "s"}</button><button type="button" class="ghost" id="impNo">No thanks</button></div></div>`;
-    $("impYes").onclick = () => { S.artists.push(...fresh); S.artists.sort((x, y) => x.name.localeCompare(y.name)); save(); $("importBanner").innerHTML = ""; renderAll(); toast(`Added ${fresh.length} artists`); scheduleCheck(); requestMissing(); };
+    $("impYes").onclick = () => { S.artists.push(...fresh); S.artists.sort((x, y) => x.name.localeCompare(y.name)); save(); $("importBanner").innerHTML = ""; renderAll(); toast(`Added ${fresh.length} artists`); scheduleCheck(); };
     $("impNo").onclick = () => { $("importBanner").innerHTML = ""; };
   }
 
   // ---------- Boot ----------
-  $("checkBtn").addEventListener("click", async () => {
-    if (!watchCfg) await loadWatchCfg();
-    if (!webFeed) await loadWebFeed();
-    await check();
-    const t = parse(webFeed?.checkedAt);
-    if (t && webFeed && feedCoversMe()) toast(`Updated. Latest web search for on-sale times: ${t.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}. It runs daily at 9:38 AM.`);
-    renderList();
-  });
+  $("checkBtn").addEventListener("click", () => check());
   readShared();
   renderAll();
   const stale = !S.fetchedAt || Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS || S.fetchKey !== fetchKey();
   if (stale) check({ quiet: true });
-  else loadWebFeed().then((f) => { if (f && f.checkedAt && f.checkedAt !== S.feedAt) check({ quiet: true }); else renderAll(); });
-  Promise.all([loadWatchCfg(), webFeed ? webFeed : loadWebFeed()]).then(() => { requestMissing(); watchForResults(); renderList(); });
   setInterval(renderList, 60000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && S.fetchedAt && Date.now() - new Date(S.fetchedAt).getTime() > STALE_MS) check({ quiet: true });
