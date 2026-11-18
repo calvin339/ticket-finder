@@ -112,15 +112,18 @@ export function parseLiveNation(html, venue) {
   const chunks = [...html.matchAll(/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g)].map((m) => { try { return JSON.parse(m[1]); } catch { return ""; } });
   const txt = chunks.join("");
   const out = new Map();
+  // Event lists appear under different keys depending on the page ("events" on the home page, "data" on /shows).
+  for (const key of ['"events":[', '"data":[', '"items":[']) {
   let idx = 0;
-  while ((idx = txt.indexOf('"events":[', idx)) !== -1) {
-    const start = idx + '"events":'.length;
+  while ((idx = txt.indexOf(key, idx)) !== -1) {
+    const start = idx + key.length - 1;
     const end = matchBracket(txt, start);
-    idx = start;
+    idx = start + 1;
     if (end < 0) continue;
     let arr; try { arr = JSON.parse(txt.slice(start, end + 1)); } catch { continue; }
+    if (!Array.isArray(arr)) continue;
     for (const e of arr) {
-      if (!e || typeof e !== "object" || !e.discovery_id || out.has(e.discovery_id)) continue;
+      if (!e || typeof e !== "object" || !e.discovery_id || !e.start_date_local || out.has(e.discovery_id)) continue;
       const names = [e.name, ...(e.artists || []).map((a) => a.name)].filter(Boolean);
       out.set(e.discovery_id, {
         title: e.name, names,
@@ -130,6 +133,7 @@ export function parseLiveNation(html, venue) {
         ticketUrl: e.url || null, sourceUrl: venue.url, status: e.status_code || "",
       });
     }
+  }
   }
   return [...out.values()];
 }
