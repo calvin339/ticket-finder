@@ -193,26 +193,98 @@ export function parseGenericDetail(html, show, now = new Date(), tz) {
   };
 }
 
+
+// ------------------------------------------------------------------ Squarespace event pages (…/events?format=json)
+const localParts = (ms, tz) => {
+  const f = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+};
+export function parseSquarespace(text, venue, now = new Date()) {
+  let d; try { d = JSON.parse(text); } catch { return []; }
+  const tz = venue.tz || "America/Los_Angeles";
+  const origin = new URL(venue.url).origin;
+  const out = [];
+  for (const e of [].concat(d.upcoming || [], d.items || [])) {
+    if (!e || !e.startDate || !e.title) continue;
+    const { date, time } = localParts(+e.startDate, tz);
+    const title = stripTags(e.title);
+    const body = stripTags(String(e.body || "") + " " + String(e.excerpt || ""));
+    const sale = extractSaleTimes(body, now, tz);
+    const url = e.fullUrl ? new URL(e.fullUrl, origin).href : venue.url;
+    const tix = /href="(https?:\/\/[^"]*(ticket|tix|etix|dice\.fm|eventbrite|seetickets|axs|prekindle|showclix|holdmyticket|tixr)[^"]*)"/i.exec(String(e.body || ""));
+    const place = e.location && e.location.addressTitle;
+    const show = {
+      title, names: [title], showDate: date, showTime: time === "00:00" ? null : time,
+      presales: sale.presales, generalOnsale: sale.general ? sale.general.start : null, generalOnsaleDateOnly: sale.general ? sale.general.dateOnly : false,
+      ticketUrl: tix ? tix[1].replace(/&amp;/g, "&") : url, sourceUrl: url, status: /sold\s*out/i.test(title + " " + body.slice(0, 300)) ? "soldout" : "",
+    };
+    if (place && venue.name && !looseSame(stripTags(place), venue.name)) show.venueOverride = stripTags(place).slice(0, 80);
+    out.push(show);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ WordPress "The Events Calendar" (wp-json/tribe/events/v1/events)
+export function parseTribe(text, venue, now = new Date()) {
+  let d; try { d = JSON.parse(text); } catch { return []; }
+  const tz = venue.tz || "America/Los_Angeles";
+  const out = [];
+  for (const e of d.events || []) {
+    const m = /(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?/.exec(e.start_date || "");
+    if (!m || !e.title) continue;
+    const title = stripTags(e.title);
+    const body = stripTags(String(e.description || "") + " " + String(e.excerpt || ""));
+    const sale = extractSaleTimes(body, now, tz);
+    const place = e.venue && e.venue.venue;
+    const show = {
+      title, names: [title], showDate: `${m[1]}-${m[2]}-${m[3]}`, showTime: m[4] && !e.all_day ? `${m[4]}:${m[5]}` : null,
+      presales: sale.presales, generalOnsale: sale.general ? sale.general.start : null, generalOnsaleDateOnly: sale.general ? sale.general.dateOnly : false,
+      ticketUrl: e.website || e.url || venue.url, sourceUrl: e.url || venue.url, status: /sold\s*out/i.test(title + " " + String(e.cost || "")) ? "soldout" : "",
+    };
+    if (place && venue.name && !looseSame(stripTags(place), venue.name)) show.venueOverride = stripTags(place).slice(0, 80);
+    out.push(show);
+  }
+  return out;
+}
+
+// Data feeds to try for a site, based on its home page.
+export function feedUrls(html, base) {
+  const origin = new URL(base).origin;
+  const out = [];
+  if (/wp-json\/tribe\/events|tribe-events/i.test(html)) out.push({ kind: "tribe", url: `${origin}/wp-json/tribe/events/v1/events?per_page=50` });
+  if (/squarespace/i.test(html)) {
+    const link = findEventsLinks(html, base).find((u) => new URL(u).origin === origin);
+    if (link) out.push({ kind: "squarespace", url: link.replace(/\/$/, "") + "?format=json" });
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ reading a found venue's shows
 // Returns { shows, kind, url } or { error }. Uses up to 2 page loads the first time; 1 after that.
 export async function readFoundVenue(v, env, fetchP, now) {
-  const siteKey = `site:${v.host}`;
+  const siteKey = `site2:${v.host}`; // bump the prefix when readers improve, so old failures get rechecked
   const known = env.SUBS ? await env.SUBS.get(siteKey, "json").catch(() => null) : null;
   const fresh = known && Date.now() - known.at < (known.kind ? SITE_TTL : FAIL_TTL);
   const venue = { ...v, url: v.website };
   if (fresh && !known.kind) return { error: known.why || "no show list found", cachedFail: true };
-  const tries = fresh ? [known.url] : [v.website];
+  // Each try: { url, kind? } (no kind = recognize the page's layout)
+  const tries = fresh ? [{ url: known.url, kind: known.kind }] : [{ url: v.website }];
   let result = { error: "no show list found" };
   for (let i = 0; i < tries.length && i < 3; i++) {
-    const u = tries[i];
-    const p = await fetchP(u);
+    const t = tries[i];
+    const p = await fetchP(t.url);
     if (p.status >= 400) { result = { error: `blocked (${p.status})` }; if (i === 0) break; continue; }
-    const kind = detectKind(p.html);
+    const kind = t.kind && PARSERS[t.kind] ? t.kind : detectKind(p.html);
     if (kind) {
-      const shows = PARSERS[kind](p.html, { ...venue, url: u }, now);
-      if (shows.length) { result = { shows, kind, url: u }; break; }
+      const shows = PARSERS[kind](p.html, { ...venue, url: t.url.replace(/\?format=json$/, "") }, now);
+      if (shows.length || t.kind) { result = shows.length ? { shows, kind, url: t.url } : { error: "no upcoming shows listed" }; if (shows.length) break; }
     }
-    if (i === 0 && !fresh) tries.push(...findEventsLinks(p.html, u).slice(0, 1));
+    if (i === 0 && !fresh) {
+      // Prefer a data feed (Squarespace, The Events Calendar); else follow the site's "Events" link.
+      const feeds = feedUrls(p.html, t.url);
+      tries.push(...(feeds.length ? feeds.slice(0, 1) : findEventsLinks(p.html, t.url).slice(0, 1).map((url) => ({ url }))));
+    }
   }
   if (env.SUBS && !(fresh && result.shows)) {
     const rec = result.shows ? { at: Date.now(), kind: result.kind, url: result.url } : { at: Date.now(), kind: null, why: result.error };

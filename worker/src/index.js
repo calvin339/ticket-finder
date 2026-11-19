@@ -12,7 +12,7 @@
 
 import { VENUES } from "./venues.js";
 import { handleAlertsRequest, runAlerts } from "./alerts.js";
-import { venuesNear, readFoundVenue, parseJsonLd, parseGenericDetail, tzFor, MAX_DISCOVERED } from "./discover.js";
+import { venuesNear, readFoundVenue, parseSquarespace, parseTribe, parseJsonLd, parseGenericDetail, tzFor, MAX_DISCOVERED } from "./discover.js";
 
 const ALLOWED_ORIGINS = ["https://calvin339.github.io"];
 const PAGE_TTL = 20 * 60; // seconds
@@ -417,7 +417,7 @@ export function parseUCTheatre(html, venue, now = new Date()) {
   }
   return out;
 }
-export const PARSERS = { jsonld: parseJsonLd, livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill, uctheatre: parseUCTheatre };
+export const PARSERS = { jsonld: parseJsonLd, squarespace: parseSquarespace, tribe: parseTribe, livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill, uctheatre: parseUCTheatre };
 // For site types whose list pages lack on-sale times: read a matching show's own page.
 export const DETAIL_PARSERS = { seetickets: parseSeeTicketsDetail, billja: parseBillJaDetail, jsonld: (html, show, now, venue) => parseGenericDetail(html, show, now, venue && venue.tz) };
 const MAX_DETAIL_PAGES = 12;
