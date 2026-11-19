@@ -46,10 +46,12 @@ function cleanWebsite(w) {
 // Restaurants and bars that sometimes have music rank below real venues.
 const FOOD = /\b(restaurant|grill|taco|taqu\w*|cafe|caf\u00e9|coffee|seafood|steak\w*|sausage|pizz\w*|kitchen|cantina|diner|bistro|eatery|bakery|mexican|sushi|wings|burger\w*|brew\w*|winery|hotel|resort|casino)\b/i;
 const MUSIC = /\b(music hall|ballroom|amphitheat(er|re)|arena|auditorium|concert|live|stage|theat(er|re)|club|lounge|hall|opera|tavern|saloon|pavilion|bowl|the [a-z]+)\b/i;
+const NOT_MUSIC = /\b(ballet|opera|children'?s|kids|youth|repertory|players|playhouse|dance (studio|academy|company)|farms?|barn|clubhouse|wedding|estate|vineyard|gardens?|park|golf|country club|community theat(er|re)|improv|comedy|magic|cinema|church)\b/i;
 function rank(v) {
   let s = v.s || 1;
   if (s === 4) s = 2; // live_music=yes on a bar/restaurant (older map builds scored these 4)
   if (FOOD.test(v.n || "")) s -= 2;
+  if (NOT_MUSIC.test(v.n || "")) s -= 3;
   if (MUSIC.test(v.n || "")) s += 1;
   return s;
 }

@@ -103,7 +103,7 @@ function parseClock(s) {
 }
 
 // Cloudflare's free plan allows 50 outside requests per search, so each search has a budget.
-const MAX_REQUESTS = 46;
+const MAX_REQUESTS = 36; // headroom: redirects count against the limit too
 function spend(budget) {
   if (!budget) return;
   if (budget.left <= 0) { const e = new Error("search limit reached"); e.budget = true; throw e; }
