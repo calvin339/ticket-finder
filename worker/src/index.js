@@ -591,7 +591,7 @@ export async function runSearch(q, env, ctx) {
     if (!twin.ticketUrl) twin.ticketUrl = e.ticketUrl;
   }
   merged.sort((a, b) => String(a.showDate).localeCompare(String(b.showDate)));
-  for (const e of events) e.status = saleStatus(e, now);
+  for (const e of merged) e.status = saleStatus(e, now);
   return { checkedAt: now.toISOString(), venuesChecked: venues.length + discovered, sources, events: merged.map(({ names, ...rest }) => rest) };
 }
 
