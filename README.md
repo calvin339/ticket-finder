@@ -10,11 +10,15 @@ Know when tickets go on sale for the artists you love, near you.
 - Artist suggestions and photos come from Deezer's public catalog (through the worker); typo fixes from MusicBrainz.
 
 ## Venues
-**Anywhere:** each search looks up music venues, live-music bars, theatres and clubs near the location on OpenStreetMap
-(`worker/src/discover.js`), up to 20 per search. For each venue's website it recognizes the layout (schema.org event data,
-Live Nation, TicketWeb, SeeTickets, …), following an "Events"/"Calendar" link if needed, and remembers what worked.
-For matching shows it opens the show's page to look for presale / on-sale times. Sites that load their shows with
-JavaScript, or block automated requests, can't be read.
+**Anywhere:** a weekly GitHub Action ("Build venue map", `tools/build_venue_map.py`) collects ~34,000 music venues,
+live-music bars, clubs and theatres that list a website from OpenStreetMap into `venues/<lat>_<lon>.json`.
+Each search reads the squares around the location and checks up to 40 nearby venue sites
+(`worker/src/discover.js`): it recognizes schema.org event data, Squarespace and "The Events Calendar" feeds,
+Live Nation, TicketWeb and SeeTickets pages, following an "Events"/"Calendar" link if needed. It remembers which
+page worked (3 days) and which sites can't be read (2 days). Sites known to work are read first; untried ones rotate,
+so coverage grows with each search. Cloudflare's free plan allows 50 requests per search, so a busy area takes a
+few searches to cover. Sites that load shows with JavaScript (Wix, AXS, many big theatres) or block automated
+requests can't be read; Ticketmaster (once its key is set) covers most of those.
 
 **Bay Area (hand-tuned):** Listed in `worker/src/venues.js`. Supported site types:
 - `livenation`: Live Nation venue sites (full presale and on-sale times, presale codes)
