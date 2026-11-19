@@ -33,6 +33,7 @@ export default {
       if (url.pathname === "/search") return json(await search(url, env, ctx), cors);
       if (url.pathname === "/artists") return json(await artistSuggest(url.searchParams.get("q") || ""), cors, 3600);
       if (url.pathname === "/venues") return json({ venues: VENUES.map(({ name, city, lat, lon, kind }) => ({ name, city, lat, lon, kind })) }, cors, 3600);
+      if (url.pathname === "/debug-raw") { const hosts = ["holeinthewallaustin.com", "vortexrep.org", "oneworldtheatre.org"]; const out = {}; for (const h of hosts) { const k = await env.SUBS.get("site2:" + h); const u = k && JSON.parse(k).url; out[h] = { memory: k }; for (const tryU of [`https://${h}/wp-json/tribe/events/v1/events?per_page=5`, `https://www.${h}/shows?format=json`, `https://www.${h}/calendar?format=json`]) { try { const r = await fetch(tryU, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) }); const t = await r.text(); out[h][tryU] = r.status + " " + t.slice(0, 700); } catch (e) { out[h][tryU] = "err " + e.message; } } } return json(out, cors); }
       if (url.pathname === "/debug-peek") return json(await debugPeek(url, env, ctx), cors);
       if (["/subscribe", "/confirm", "/subscription", "/unsubscribe"].includes(url.pathname)) {
         const r = await handleAlertsRequest(url, request, env, ctx, { runSearch });
