@@ -109,19 +109,16 @@ function spend(budget) {
   if (budget.left <= 0) { const e = new Error("search limit reached"); e.budget = true; throw e; }
   budget.left--;
 }
+// Pages are cached by Cloudflare for 20 minutes (one request each; the Cache API would cost 3).
 async function fetchPage(url, ctx, budget) {
-  const cache = caches.default;
-  const key = new Request(url, { method: "GET" });
-  const hit = await cache.match(key);
-  if (hit) return { html: await hit.text(), cached: true, status: hit.status };
   spend(budget);
-  const res = await fetch(url, { headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" }, redirect: "follow", cf: { cacheTtl: 0 } });
+  const res = await fetch(url, {
+    headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" },
+    redirect: "follow", signal: AbortSignal.timeout(12000),
+    cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": PAGE_TTL, "404": 600, "500-599": 0 } },
+  });
   const html = await res.text();
-  if (res.ok) {
-    const copy = new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": `public, max-age=${PAGE_TTL}` } });
-    ctx.waitUntil(cache.put(key, copy));
-  }
-  return { html, cached: false, status: res.status };
+  return { html, cached: res.headers.get("cf-cache-status") === "HIT", status: res.status };
 }
 
 // ---------------------------------------------------------------- venue parsers
