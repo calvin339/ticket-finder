@@ -103,22 +103,35 @@ function parseClock(s) {
 }
 
 // Cloudflare's free plan allows 50 outside requests per search, so each search has a budget.
-const MAX_REQUESTS = 36; // headroom: redirects count against the limit too
+const MAX_REQUESTS = 46; // Cloudflare free plan: 50 per search (every redirect hop counts; fetchPage counts them)
 function spend(budget) {
   if (!budget) return;
   if (budget.left <= 0) { const e = new Error("search limit reached"); e.budget = true; throw e; }
   budget.left--;
 }
 // Pages are cached by Cloudflare for 20 minutes (one request each; the Cache API would cost 3).
+// Redirects are followed by hand because each hop counts toward Cloudflare's 50-request limit.
 async function fetchPage(url, ctx, budget) {
-  spend(budget);
-  const res = await fetch(url, {
-    headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" },
-    redirect: "follow", signal: AbortSignal.timeout(12000),
-    cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": PAGE_TTL, "404": 600, "500-599": 0 } },
-  });
-  const html = await res.text();
-  return { html, cached: res.headers.get("cf-cache-status") === "HIT", status: res.status };
+  let u = url;
+  for (let hop = 0; hop < 4; hop++) {
+    spend(budget);
+    let res;
+    try {
+      res = await fetch(u, {
+        headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/json", "Accept-Language": "en-US,en;q=0.9" },
+        redirect: "manual", signal: AbortSignal.timeout(12000),
+        cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": PAGE_TTL, "404": 600, "500-599": 0 } },
+      });
+    } catch (e) {
+      if (/too many subrequests/i.test(String(e && e.message))) { if (budget) budget.left = 0; e.budget = true; }
+      throw e;
+    }
+    const loc = res.status >= 300 && res.status < 400 && res.headers.get("location");
+    if (loc) { u = new URL(loc, u).href; continue; }
+    const html = await res.text();
+    return { html, cached: res.headers.get("cf-cache-status") === "HIT", status: res.status, url: u };
+  }
+  return { html: "", status: 310, url: u };
 }
 
 // ---------------------------------------------------------------- venue parsers

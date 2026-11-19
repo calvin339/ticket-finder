@@ -280,12 +280,13 @@ export async function readFoundVenue(v, env, fetchP, now) {
     const kind = t.kind && PARSERS[t.kind] ? t.kind : detectKind(p.html);
     if (kind) {
       const shows = PARSERS[kind](p.html, { ...venue, url: t.url.replace(/\?format=json$/, "") }, now);
-      if (shows.length || t.kind) { result = shows.length ? { shows, kind, url: t.url } : { error: "no upcoming shows listed" }; if (shows.length) break; }
+      if (shows.length || t.kind) { result = shows.length ? { shows, kind, url: p.url || t.url } : { error: "no upcoming shows listed" }; if (shows.length) break; }
     }
     if (i === 0 && !fresh) {
       // Prefer a data feed (Squarespace, The Events Calendar); else follow the site's "Events" link.
-      const feeds = feedUrls(p.html, t.url);
-      tries.push(...(feeds.length ? feeds.slice(0, 1) : findEventsLinks(p.html, t.url).slice(0, 1).map((url) => ({ url }))));
+      const base = p.url || t.url;
+      const feeds = feedUrls(p.html, base);
+      tries.push(...(feeds.length ? feeds.slice(0, 1) : findEventsLinks(p.html, base).slice(0, 1).map((url) => ({ url }))));
     }
   }
   if (env.SUBS && !(fresh && result.shows)) {
