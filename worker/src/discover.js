@@ -43,6 +43,17 @@ function cleanWebsite(w) {
   try { const u = new URL(w); if (!/^https?:$/.test(u.protocol) || SKIP_HOST.test(u.hostname + ".")) return null; u.hash = ""; return u.href; } catch { return null; }
 }
 
+// Restaurants and bars that sometimes have music rank below real venues.
+const FOOD = /\b(restaurant|grill|taco|taqu\w*|cafe|caf\u00e9|coffee|seafood|steak\w*|sausage|pizz\w*|kitchen|cantina|diner|bistro|eatery|bakery|mexican|sushi|wings|burger\w*|brew\w*|winery|hotel|resort|casino)\b/i;
+const MUSIC = /\b(music hall|ballroom|amphitheat(er|re)|arena|auditorium|concert|live|stage|theat(er|re)|club|lounge|hall|opera|tavern|saloon|pavilion|bowl|the [a-z]+)\b/i;
+function rank(v) {
+  let s = v.s || 1;
+  if (s === 4) s = 2; // live_music=yes on a bar/restaurant (older map builds scored these 4)
+  if (FOOD.test(v.n || "")) s -= 2;
+  if (MUSIC.test(v.n || "")) s += 1;
+  return s;
+}
+
 // ------------------------------------------------------------------ the venue map
 // venues/<lat>_<lon>.json on the site (1-degree squares), built weekly from OpenStreetMap by a GitHub Action.
 const MAP_BASE = "https://calvin339.github.io/ticket-finder/venues/";
@@ -58,7 +69,7 @@ export async function venuesNear(loc, radius, env, fetchJson) {
     if (!v || !v.w || SKIP_NAME.test(v.n || "")) continue;
     const site = cleanWebsite(v.w);
     if (!site) continue;
-    const venue = { name: v.n, lat: v.la, lon: v.lo, website: site, host: hostOf(site), city: v.c || "", score: v.s || 1 };
+    const venue = { name: v.n, lat: v.la, lon: v.lo, website: site, host: hostOf(site), city: v.c || "", score: rank(v) };
     if (milesBetween(loc, venue) <= r) venues.push(venue);
   }
   venues.sort((a, b) => b.score - a.score || milesBetween(loc, a) - milesBetween(loc, b));
@@ -183,7 +194,7 @@ export function parseGenericDetail(html, show, now = new Date(), tz) {
 }
 
 // ------------------------------------------------------------------ reading a found venue's shows
-// Returns { shows, kind, url } or { error }. Uses up to 3 page loads the first time; 1 after that.
+// Returns { shows, kind, url } or { error }. Uses up to 2 page loads the first time; 1 after that.
 export async function readFoundVenue(v, env, fetchP, now) {
   const siteKey = `site:${v.host}`;
   const known = env.SUBS ? await env.SUBS.get(siteKey, "json").catch(() => null) : null;
@@ -201,7 +212,7 @@ export async function readFoundVenue(v, env, fetchP, now) {
       const shows = PARSERS[kind](p.html, { ...venue, url: u }, now);
       if (shows.length) { result = { shows, kind, url: u }; break; }
     }
-    if (i === 0 && !fresh) tries.push(...findEventsLinks(p.html, u).slice(0, 2));
+    if (i === 0 && !fresh) tries.push(...findEventsLinks(p.html, u).slice(0, 1));
   }
   if (env.SUBS && !(fresh && result.shows)) {
     const rec = result.shows ? { at: Date.now(), kind: result.kind, url: result.url } : { at: Date.now(), kind: null, why: result.error };

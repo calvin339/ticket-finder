@@ -112,7 +112,6 @@ function spend(budget) {
 async function fetchPage(url, ctx, budget) {
   const cache = caches.default;
   const key = new Request(url, { method: "GET" });
-  spend(budget);
   const hit = await cache.match(key);
   if (hit) return { html: await hit.text(), cached: true, status: hit.status };
   spend(budget);
