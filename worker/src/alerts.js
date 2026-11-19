@@ -58,7 +58,7 @@ function saleLines(e) {
 }
 function eventHtml(e, extra = "") {
   const lines = saleLines(e);
-  const status = e.status === "onsale" ? "On sale now" : e.status === "soldout" ? "Sold out" : lines.length ? "" : "No on-sale date listed yet";
+  const status = e.status === "onsale" ? "On sale now" : e.status === "likely" ? "Probably on sale (check the link)" : e.status === "soldout" ? "Sold out" : e.status === "cancelled" ? "Cancelled" : lines.length ? "" : "No on-sale date listed yet";
   return `<div style="margin:0 0 16px;padding:12px 14px;border:1px solid #e3e3e8;border-radius:10px">
     <div style="font-size:16px;font-weight:600">${enc(e.artist)}</div>
     <div style="color:#555">${enc(e.venue)}${e.city ? ", " + enc(e.city) : ""} &middot; ${enc(fmtShow(e))}</div>
@@ -77,12 +77,15 @@ function wrapEmail(sub, workerUrl, title, inner) {
 }
 
 async function sendEmail(env, to, subject, html) {
-  if (!env.BREVO_API_KEY || !env.ALERT_FROM_EMAIL) throw new Error("Email alerts aren't set up yet (missing Brevo key).");
+  const key = String(env.BREVO_API_KEY || "").trim().replace(/^["']|["']$/g, ""), from = String(env.ALERT_FROM_EMAIL || "").trim();
+  if (!key || !from) throw new Error("Email alerts aren't set up yet (missing Brevo key).");
+  if (/^xsmtpsib-/.test(key)) throw new Error("Email isn't working: the Brevo key is an SMTP key. Use an API key (starts with xkeysib-).");
   const r = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
-    headers: { "api-key": env.BREVO_API_KEY, "Content-Type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ sender: { name: "Ticket Finder", email: env.ALERT_FROM_EMAIL }, to: [{ email: to }], subject, htmlContent: html }),
+    headers: { "api-key": key, "Content-Type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ sender: { name: "Ticket Finder", email: from }, to: [{ email: to }], subject, htmlContent: html }),
   });
+  if (r.status === 401) throw new Error("Email isn't working: Brevo didn't accept the API key. Check the BREVO_API_KEY secret.");
   if (!r.ok) throw new Error(`Email failed (${r.status}): ${(await r.text()).slice(0, 200)}`);
 }
 

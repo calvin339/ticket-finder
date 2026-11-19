@@ -300,7 +300,7 @@
       presales: (Array.isArray(e.presales) ? e.presales : []).map((p) => ({ name: String(p.name || "Presale").slice(0, 80), start: validIso(p.start), end: validIso(p.end), code: p.code ? String(p.code).slice(0, 40) : null, dateOnly: !!p.dateOnly })).filter((p) => p.start),
       artistName: artist.name, artistKey: artistKey(artist),
       showDate: /^\d{4}-\d{2}-\d{2}$/.test(e.showDate || "") ? e.showDate : null, showTime: /^\d{2}:\d{2}$/.test(e.showTime || "") ? e.showTime : null, showDateTime: null,
-      dateTBA: !e.showDate, status: /cancel/i.test(e.status || "") ? "cancelled" : "", onSaleNow: e.status === "onsale",
+      dateTBA: !e.showDate, status: /cancel/i.test(e.status || "") ? "cancelled" : e.status === "soldout" ? "soldout" : "", onSaleNow: e.status === "onsale", likelyOnSale: e.status === "likely",
       venue: String(e.venue || "").slice(0, 120), city: String(e.city || "").slice(0, 80),
     };
   }
@@ -332,8 +332,10 @@
       all.push(ev);
       if (ev.status === "cancelled") continue;
       const g = parse(ev.publicStart);
-      if ((g && g.getTime() <= Date.now()) || (!g && ev.onSaleNow)) onsale.push(ev);
-      else if (!g && !ev.presales.length) tba.push(ev);
+      const nextSale = (g && g.getTime() > Date.now()) || ev.presales.some((p) => { const d = parse(p.start); return d && d.getTime() > Date.now(); });
+      if (ev.status === "soldout") continue;
+      if (!nextSale && ((g && g.getTime() <= Date.now()) || ev.onSaleNow || ev.likelyOnSale || ev.presales.length)) onsale.push(ev);
+      else if (!nextSale) tba.push(ev);
     }
     const byShow = (a, b) => (a.showDate || "9999").localeCompare(b.showDate || "9999");
     return { upcoming, onsale: onsale.sort(byShow), tba: tba.sort(byShow), all: all.sort(byShow) };
@@ -574,11 +576,16 @@
   function eventHtml(ev) {
     const tags = [];
     if (ev.status === "cancelled") tags.push(`<span class="tag general">Cancelled</span>`);
+    else if (ev.status === "soldout") tags.push(`<span class="tag general">Sold out</span>`);
     else if (ev.status === "rescheduled" || ev.status === "postponed") tags.push(`<span class="tag tba">${esc(ev.status)}</span>`);
     const g = parse(ev.publicStart);
-    if (g && g.getTime() <= Date.now()) tags.push(`<span class="tag onsale">On sale now</span>`);
+    const presaleSoon = ev.presales.some((p) => { const d = parse(p.start); return d && d.getTime() > Date.now(); });
+    if (ev.status === "soldout" || ev.status === "cancelled") {}
+    else if (g && g.getTime() <= Date.now()) tags.push(`<span class="tag onsale">On sale now</span>`);
     else if (g) tags.push(`<span class="tag general">General on-sale ${esc(fmtShort(g))}${ev.publicDateOnly ? "" : " " + esc(fmtTime(g))}</span>`);
-    else if (ev.onSaleNow) tags.push(`<span class="tag onsale">On sale now</span>`);
+    else if (presaleSoon) {}
+    else if (ev.onSaleNow || ev.presales.length) tags.push(`<span class="tag onsale">On sale now</span>`);
+    else if (ev.likelyOnSale) tags.push(`<span class="tag onsale" title="The venue lists a ticket link but no on-sale date, so tickets are probably on sale.">Probably on sale</span>`);
     else tags.push(`<span class="tag tba">On-sale date not listed yet</span>`);
     for (const p of ev.presales) { const d = parse(p.start); if (d && d.getTime() > Date.now()) tags.push(`<span class="tag presale">${esc(p.name)} ${esc(fmtShort(d))}${p.dateOnly ? "" : " " + esc(fmtTime(d))}</span>`); }
     const d = ev.showDate && !ev.dateTBA ? parse(ev.showDate + "T12:00:00") : null;

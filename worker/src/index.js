@@ -259,7 +259,7 @@ export function parseAnotherPlanet(html, venue, now = new Date()) {
       title, names: [title, ...(support ? stripTags(support[1]).replace(/^with special guests?\s*/i, "").split(/,|&|\band\b/).map((s) => s.trim()).filter(Boolean) : [])],
       showDate: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`, showTime: clock ? `${String(clock.h).padStart(2, "0")}:${String(clock.mi).padStart(2, "0")}` : null,
       presales, generalOnsale, generalOnsaleDateOnly: generalDateOnly,
-      ticketUrl: tix ? decodeEntities(tix[1]) : (link ? link[1] : null), sourceUrl: link ? link[1] : venue.url, status: presales.length || generalOnsale ? "upcoming" : "",
+      ticketUrl: tix ? decodeEntities(tix[1]) : (link ? link[1] : null), sourceUrl: link ? link[1] : venue.url, status: /\bsold\s*out\b/i.test(text) ? "soldout" : presales.length || generalOnsale ? "upcoming" : /buy\s*tickets/i.test(text) ? "onsale" : "",
     };
     // A show can appear twice (featured carousel + list): keep the best details from both.
     if (!prev) { out.set(key, item); continue; }
@@ -328,7 +328,8 @@ export function parseSeeTickets(html, venue, now = new Date()) {
       title, names, showDate: `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
       showTime: clock ? `${String(clock.h).padStart(2, "0")}:${String(clock.mi).padStart(2, "0")}` : null,
       presales: [], generalOnsale: null, generalOnsaleDateOnly: false,
-      ticketUrl: url, sourceUrl: url, status: "", detailUrl: url,
+      ticketUrl: url, sourceUrl: url, detailUrl: url,
+      status: /button-comingsoon|>\s*coming soon\s*</i.test(b) ? "upcoming" : /button-soldout|>\s*sold out\s*</i.test(b) ? "soldout" : /seetickets-buy-btn/.test(b) ? "onsale" : "",
     });
   }
   return [...out.values()];
@@ -365,7 +366,7 @@ export function parseBillJa(html, venue) {
       venueOverride: upstairs ? "Swedish American Hall" : null,
       showDate: `${time[1]}-${time[2]}-${time[3]}`, showTime: `${time[4]}:${time[5]}`,
       presales: [], generalOnsale: null, generalOnsaleDateOnly: false,
-      ticketUrl: url, sourceUrl: url, status: status ? stripTags(status[1]).toLowerCase() : "", detailUrl: url,
+      ticketUrl: url, sourceUrl: url, status: status ? (/sold/i.test(status[1]) ? "soldout" : /cancel/i.test(status[1]) ? "cancelled" : stripTags(status[1]).toLowerCase()) : "onsale", detailUrl: url,
     });
   }
   return out;
@@ -430,6 +431,23 @@ export function parseUCTheatre(html, venue, now = new Date()) {
   return out;
 }
 export const PARSERS = { jsonld: parseJsonLd, squarespace: parseSquarespace, tribe: parseTribe, livenation: parseLiveNation, ticketweb: parseTicketWeb, anotherplanet: parseAnotherPlanet, seetickets: parseSeeTickets, billja: parseBillJa, bottomofthehill: parseBottomOfTheHill, uctheatre: parseUCTheatre };
+// One consistent status per show: onsale | upcoming | soldout | cancelled | likely (ticket link, no sale info) | ""
+export function saleStatus(e, now = new Date()) {
+  const st = String(e.status || "").toLowerCase();
+  if (/cancel/.test(st)) return "cancelled";
+  if (/sold\s*out|soldout|offsale/.test(st)) return "soldout";
+  const t = (x) => (x ? new Date(x).getTime() : NaN);
+  const times = [...(e.presales || []).map((p) => t(p.start)), t(e.generalOnsale)].filter((x) => !isNaN(x));
+  const future = times.some((x) => x > now.getTime());
+  const generalPassed = !isNaN(t(e.generalOnsale)) && t(e.generalOnsale) <= now.getTime();
+  if (generalPassed || (times.length && !future)) return "onsale";
+  if (future) return "upcoming";
+  if (/onsale|on sale|presale/.test(st)) return "onsale";
+  if (/upcoming|coming/.test(st)) return "upcoming";
+  if (e.ticketUrl && e.ticketUrl !== e.sourceUrl) return "likely";
+  return e.ticketUrl ? "likely" : "";
+}
+
 // For site types whose list pages lack on-sale times: read a matching show's own page.
 export const DETAIL_PARSERS = { seetickets: parseSeeTicketsDetail, billja: parseBillJaDetail, jsonld: (html, show, now, venue) => parseGenericDetail(html, show, now, venue && venue.tz) };
 const MAX_DETAIL_PAGES = 12;
@@ -573,6 +591,7 @@ export async function runSearch(q, env, ctx) {
     if (!twin.ticketUrl) twin.ticketUrl = e.ticketUrl;
   }
   merged.sort((a, b) => String(a.showDate).localeCompare(String(b.showDate)));
+  for (const e of events) e.status = saleStatus(e, now);
   return { checkedAt: now.toISOString(), venuesChecked: venues.length + discovered, sources, events: merged.map(({ names, ...rest }) => rest) };
 }
 
