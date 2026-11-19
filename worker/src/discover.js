@@ -9,7 +9,7 @@
 import { PARSERS, stripTags, localToIso, extractSaleTimes } from "./index.js";
 
 const SITE_TTL = 3 * 86400 * 1000, FAIL_TTL = 2 * 86400 * 1000;
-export const MAX_DISCOVERED = 20;
+export const MAX_DISCOVERED = 40; // sites known to be unreadable cost nothing, so look at plenty
 const MAX_AREA_MILES = 25;
 
 const SKIP_NAME = /\b(cinema|movie|multiplex|imax|school|elementary|middle school|high school|college|university|church|library|museum|community cent(er|re)|senior)\b/i;

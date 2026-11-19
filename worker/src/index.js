@@ -33,8 +33,6 @@ export default {
       if (url.pathname === "/search") return json(await search(url, env, ctx), cors);
       if (url.pathname === "/artists") return json(await artistSuggest(url.searchParams.get("q") || ""), cors, 3600);
       if (url.pathname === "/venues") return json({ venues: VENUES.map(({ name, city, lat, lon, kind }) => ({ name, city, lat, lon, kind })) }, cors, 3600);
-      if (url.pathname === "/debug-raw") { const hosts = ["holeinthewallaustin.com", "vortexrep.org", "oneworldtheatre.org"]; const out = {}; for (const h of hosts) { const k = await env.SUBS.get("site2:" + h); const u = k && JSON.parse(k).url; out[h] = { memory: k }; for (const tryU of [`https://${h}/wp-json/tribe/events/v1/events?per_page=5`, `https://www.${h}/shows?format=json`, `https://www.${h}/calendar?format=json`]) { try { const r = await fetch(tryU, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) }); const t = await r.text(); out[h][tryU] = r.status + " " + t.slice(0, 700); } catch (e) { out[h][tryU] = "err " + e.message; } } } return json(out, cors); }
-      if (url.pathname === "/debug-peek") return json(await debugPeek(url, env, ctx), cors);
       if (["/subscribe", "/confirm", "/subscription", "/unsubscribe"].includes(url.pathname)) {
         const r = await handleAlertsRequest(url, request, env, ctx, { runSearch });
         return r instanceof Response ? r : json(r, cors);
@@ -563,20 +561,3 @@ async function artistSuggest(q) {
 }
 
 
-// Temporary: what platforms do nearby venue sites use?
-async function debugPeek(url, env, ctx) {
-  const lat = +url.searchParams.get("lat"), lon = +url.searchParams.get("lon");
-  const near = await venuesNear({ lat, lon }, 25, env, async (u) => { const r = await fetch(u, { cf: { cacheTtl: 3600, cacheEverything: true } }); return r.status === 404 ? [] : r.json(); });
-  const budget = { left: 44 };
-  const SIG = { squarespace: /squarespace/i, wix: /wix(static)?\.com|_wixCssImports/i, wordpress: /wp-content|wp-json/i, tribe: /tribe-events/i, webflow: /webflow/i, etix: /etix\.com/i, dice: /dice\.fm|DiceEventListWidget/i, seetickets: /seetickets/i, ticketweb: /ticketweb/i, axs: /axs\.com/i, ticketmaster: /ticketmaster\.com/i, opendate: /opendate/i, eventbrite: /eventbrite/i, prekindle: /prekindle/i, tixr: /tixr/i, venuepilot: /venuepilot/i, showclix: /showclix/i, ticketfly: /ticketfly/i, bandsintown: /bandsintown/i, songkick: /songkick/i, rockhouse: /rockhouse|rhp-event/i, ldjson: /application\/ld\+json/i, nextjs: /__NEXT_DATA__|__next_f/i, shopify: /cdn\.shopify/i, gcal: /calendar\.google\.com/i, timely: /time\.ly|timely/i, elfsight: /elfsight/i };
-  const out = {};
-  await Promise.all(near.slice(0, 22).map(async (v) => {
-    try {
-      const p = await fetchPage(v.website, ctx, budget);
-      const hits = Object.entries(SIG).filter(([, re]) => re.test(p.html)).map(([k]) => k);
-      const links = [...p.html.matchAll(/href="([^"]*(event|calendar|show|concert)[^"]*)"/gi)].map((m) => m[1]).slice(0, 3);
-      out[v.name] = `${p.status} ${p.html.length}b [${hits.join(",")}] ${links.join(" ")}`.slice(0, 260);
-    } catch (e) { out[v.name] = "err " + e.message; }
-  }));
-  return out;
-}
