@@ -12,7 +12,7 @@
 
 import { VENUES } from "./venues.js";
 import { handleAlertsRequest, runAlerts } from "./alerts.js";
-import { venuesNear, readFoundVenue, parseSquarespace, parseTribe, parseJsonLd, parseGenericDetail, tzFor, MAX_DISCOVERED } from "./discover.js";
+import { venuesNear, readFoundVenue, siteKeyOf, parseSquarespace, parseTribe, parseJsonLd, parseGenericDetail, tzFor, MAX_DISCOVERED } from "./discover.js";
 
 const ALLOWED_ORIGINS = ["https://calvin339.github.io"];
 const PAGE_TTL = 20 * 60; // seconds
@@ -529,16 +529,28 @@ export async function runSearch(q, env, ctx) {
     } catch (e) { sources["Venue finder"] = `error: ${String(e.message || e).slice(0, 80)}`; return; }
     const pick = near.filter((v) => milesBetween(loc, v) <= radius && !curatedHosts.has(v.host) && !VENUES.some((c) => milesBetween(c, v) < 0.1)).slice(0, MAX_DISCOVERED);
     discovered = pick.length;
+    // What we already know about these sites (one storage call for all of them).
+    let memory = new Map();
+    if (env.SUBS && pick.length) { try { memory = await env.SUBS.get(pick.map((v) => siteKeyOf(v.host)), "json"); } catch {} }
+    const mem = (v) => (memory && memory.get(siteKeyOf(v.host))) || null;
+    // Order: sites known to work, then a random mix of untried ones (so repeated searches cover new ground).
+    const works = pick.filter((v) => mem(v)?.kind), untried = pick.filter((v) => !mem(v)).sort(() => Math.random() - 0.5);
+    const failed = pick.filter((v) => mem(v) && !mem(v).kind);
+    for (const v of failed) sources[v.name] = mem(v).why || "no show list found";
     await curated; // hand-tuned venues get the request budget first
-    await Promise.all(pick.map(async (v) => {
+    const queue = [...works, ...untried];
+    const worker = async () => { for (let v; (v = queue.shift()); ) await readOne(v); };
+    await Promise.all([1, 2, 3, 4, 5, 6].map(worker));
+    async function readOne(v) {
       const venue = { ...v, kind: "jsonld", tz };
+      if (budget.left <= 1) { sources[v.name] = "skipped (search limit)"; return; }
       try {
-        const r = await readFoundVenue(venue, env, (u) => fetchPage(u, ctx, budget), now);
+        const r = await readFoundVenue(venue, env, (u) => fetchPage(u, ctx, budget), now, mem(v));
         if (r.error) { sources[v.name] = r.error; return; }
         sources[v.name] = `${r.shows.length} shows`;
         await collect({ ...venue, kind: r.kind }, r.shows);
       } catch (e) { sources[v.name] = e.budget ? "skipped (search limit)" : `error: ${String(e.message || e).slice(0, 60)}`; }
-    }));
+    }
   })();
   await Promise.all([curated, auto]);
 

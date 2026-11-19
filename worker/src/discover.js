@@ -264,9 +264,10 @@ export function feedUrls(html, base) {
 
 // ------------------------------------------------------------------ reading a found venue's shows
 // Returns { shows, kind, url } or { error }. Uses up to 2 page loads the first time; 1 after that.
-export async function readFoundVenue(v, env, fetchP, now) {
-  const siteKey = `site2:${v.host}`; // bump the prefix when readers improve, so old failures get rechecked
-  const known = env.SUBS ? await env.SUBS.get(siteKey, "json").catch(() => null) : null;
+export const siteKeyOf = (host) => `site2:${host}`; // bump the prefix when readers improve, so old failures get rechecked
+export async function readFoundVenue(v, env, fetchP, now, knownIn) {
+  const siteKey = siteKeyOf(v.host);
+  const known = knownIn !== undefined ? knownIn : env.SUBS ? await env.SUBS.get(siteKey, "json").catch(() => null) : null;
   const fresh = known && Date.now() - known.at < (known.kind ? SITE_TTL : FAIL_TTL);
   const venue = { ...v, url: v.website };
   if (fresh && !known.kind) return { error: known.why || "no show list found", cachedFail: true };
